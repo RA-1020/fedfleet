@@ -1,6 +1,6 @@
 # FedFleet
 
-Communication-efficient federated learning on a hybrid multicloud (SE-315 Cloud Computing, NUST SEECS).
+Communication-efficient federated learning on a hybrid multicloud.
 
 Each site keeps a **frozen, pre-trained backbone** and trains only a small **task head**. Only the head travels to the aggregator and back: **28,248 bytes per update instead of 1,847,058 (98.47% less)**. This repo is the Layer 1 starter: aggregation service (Σ), node service (N), per-round communication metrics, checkpoints, and dropout tolerance.
 
