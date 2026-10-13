@@ -1,0 +1,24 @@
+# Local deployment: one aggregator (SuperLink) and two sites (SuperNodes) in containers.
+# Start:  docker compose -f deploy/local/docker-compose.yml up --build
+# Train:  flwr run . fedfleet-docker --stream      (from the repo root, on your Mac)
+# Data:   put RML2016.10a_dict.pkl in ./data and pass data-path="/data/RML2016.10a_dict.pkl"
+services:
+  superlink:
+    build: { context: ../.., dockerfile: deploy/local/Dockerfile }
+    command: ["flower-superlink", "--insecure", "--host", "0.0.0.0"]
+    ports: ["8000:8000", "9092:9092"]
+    volumes: ["../../runs:/root/fedfleet-runs", "../../data:/data:ro"]
+
+  supernode-0:
+    build: { context: ../.., dockerfile: deploy/local/Dockerfile }
+    command: ["flower-supernode", "--insecure", "--superlink", "superlink:9092",
+              "--node-config", "partition-id=0 num-partitions=2"]
+    volumes: ["../../data:/data:ro"]
+    depends_on: [superlink]
+
+  supernode-1:
+    build: { context: ../.., dockerfile: deploy/local/Dockerfile }
+    command: ["flower-supernode", "--insecure", "--superlink", "superlink:9092",
+              "--node-config", "partition-id=1 num-partitions=2"]
+    volumes: ["../../data:/data:ro"]
+    depends_on: [superlink]

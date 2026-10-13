@@ -1,0 +1,11 @@
+# Append to ~/.flwr/config.toml on your Mac.
+
+# SuperLink + SuperNodes started with scripts/run_local.sh
+[superlink.fedfleet-local]
+address = "127.0.0.1:8000"
+insecure = true
+
+# SuperLink + SuperNodes started with deploy/local/docker-compose.yml
+[superlink.fedfleet-docker]
+address = "127.0.0.1:8000"
+insecure = true

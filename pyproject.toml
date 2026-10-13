@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fedfleet"
+version = "0.1.0"
+description = "FedFleet: communication-efficient federated learning on a hybrid multicloud (SE-315)"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "flwr==1.38.0",
+    "torch>=2.4",
+    "numpy>=1.26",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["fedfleet"]
+
+[tool.flwr.app]
+publisher = "fedfleet"
+
+[tool.flwr.app.components]
+serverapp = "fedfleet.server_app:app"
+clientapp = "fedfleet.client_app:app"
+
+[tool.flwr.app.config]
+num-server-rounds = 10
+fraction-train = 1.0
+min-nodes = 2               # a round needs at least this many nodes (dropout tolerance)
+round-timeout = 120.0       # seconds; slower or offline nodes are skipped for the round
+local-epochs = 1
+batch-size = 64
+lr = 0.005
+head-only = true            # true = exchange only the task head; false = full model (E9 baseline)
+num-classes = 11
+dirichlet-alpha = 0.5       # non-IID level of the client partitions
+data-path = ""              # path to RML2016.10a_dict.pkl; empty = synthetic data
+backbone-path = ""          # path to a pre-trained backbone; empty = seeded random backbone
+metrics-dir = "~/fedfleet-runs"  # per-round JSONL metrics and checkpoints
+resume = false              # resume from <metrics-dir>/latest_checkpoint.pt
