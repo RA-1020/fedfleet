@@ -10,11 +10,3 @@ data/
 *.pem
 certificates/
 .DS_Store
-.env.*
-!.env.example
-*.tfstate
-*.tfstate.*
-.terraform/
-*.tfvars
-*_ed25519
-kubeconfig*

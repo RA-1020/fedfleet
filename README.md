@@ -8,15 +8,34 @@ Built on **Flower 1.38.0**. Many Flower tutorials online use the older API and w
 
 ## 1. Setup (macOS, Apple Silicon)
 
+Commands in this README contain no `#` comments, because zsh (the macOS default shell) treats `#` in a typed command as an argument unless `interactivecomments` is on.
+
+If you do not have the code yet, clone the repository root (not a `/tree/main` URL):
+
 ```bash
-brew install uv
-git clone <your-repo-url> fedfleet && cd fedfleet
-uv venv --python 3.12 && source .venv/bin/activate
-uv pip install -e .
-export FLWR_DISABLE_RUNTIME_DEPENDENCY_INSTALLATION=1   # add this to ~/.zshrc
+git clone https://github.com/RA-1020/fedfleet.git
+cd fedfleet
 ```
 
-The last line matters: by default Flower 1.38 reinstalls the app's dependencies (including PyTorch) into a fresh environment for every run. With it set, runs use this venv.
+Then, inside the `fedfleet` folder:
+
+```bash
+uv venv --python 3.12
+source .venv/bin/activate
+uv pip install -e .
+echo 'export FLWR_DISABLE_RUNTIME_DEPENDENCY_INSTALLATION=1' >> ~/.zshrc
+export FLWR_DISABLE_RUNTIME_DEPENDENCY_INSTALLATION=1
+```
+
+The environment variable matters: by default Flower 1.38 reinstalls the app's dependencies (including PyTorch) into a fresh environment for every run. With it set, runs use this venv. The `echo` line makes it permanent for new terminals; the `export` line sets it in the current one.
+
+If a conda environment is active (the prompt shows `(base)`), run `conda deactivate` before activating the venv so the two do not mix.
+
+If you ever started a run before setting the variable, restart the local SuperLink so it picks it up:
+
+```bash
+pkill -f flower-superlink
+```
 
 ## 2. Check the communication numbers
 
@@ -26,8 +45,10 @@ python scripts/count_bytes.py
 
 ## 3. Run a simulation (all sites on one machine)
 
+Set the number of simulated sites once (repeat it if the local SuperLink restarts), then run:
+
 ```bash
-flwr federation simulation-config --num-supernodes 3     # once
+flwr federation simulation-config --num-supernodes 3
 flwr run . --stream --run-config "num-server-rounds=5"
 ```
 
@@ -53,11 +74,23 @@ If you see `ActorPool is empty` or the wrong number of nodes, the local SuperLin
 
 This is the same topology the cloud deployment uses: a SuperLink plus independent SuperNodes.
 
+Add the connection settings once:
+
 ```bash
-cat deploy/flwr-config-snippet.toml >> ~/.flwr/config.toml   # once
-scripts/run_local.sh 2                                       # SuperLink + 2 SuperNodes
+cat deploy/flwr-config-snippet.toml >> ~/.flwr/config.toml
+```
+
+Start a SuperLink and two SuperNodes, then run training against them:
+
+```bash
+scripts/run_local.sh 2
 flwr run . fedfleet-local --stream --run-config "num-server-rounds=6 min-nodes=1 round-timeout=25.0"
-scripts/stop_local.sh                                        # when finished
+```
+
+Stop everything when finished:
+
+```bash
+scripts/stop_local.sh
 ```
 
 In Flower 1.38 the Control API that `flwr run` talks to is an HTTP API on port **8000** (not the older gRPC port 9093). The Fleet API that SuperNodes connect to is on **9092**.
@@ -66,10 +99,16 @@ In Flower 1.38 the Control API that `flwr run` talks to is an HTTP API on port *
 
 With the deployment from section 4 running a long run (`num-server-rounds=10`), open a second terminal:
 
+Take site 1 offline:
+
 ```bash
-scripts/kill_node.sh 1        # site 1 goes offline
-# watch: the next round finishes with 1/2 nodes after round-timeout seconds
-scripts/start_node.sh 1 2     # site 1 comes back and rejoins
+scripts/kill_node.sh 1
+```
+
+The next round finishes with 1/2 nodes. Then bring site 1 back; it rejoins at the following round:
+
+```bash
+scripts/start_node.sh 1 2
 ```
 
 `min-nodes=1` lets a round finish with a single site; `round-timeout` is how long the aggregator waits for a slow or missing site.
