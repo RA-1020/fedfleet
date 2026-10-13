@@ -67,6 +67,7 @@ def _synthetic(num_classes: int, per_class: int = 600) -> tuple[np.ndarray, np.n
 
 
 def load_all(data_path: str, num_classes: int) -> tuple[torch.Tensor, torch.Tensor]:
+    data_path = os.path.expanduser(data_path) if data_path else ""
     key = data_path or f"synthetic-{num_classes}"
     if key not in _CACHE:
         if data_path:

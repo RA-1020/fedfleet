@@ -33,9 +33,10 @@ local-epochs = 1
 batch-size = 64
 lr = 0.005
 head-only = true            # true = exchange only the task head; false = full model (E9 baseline)
+site-eval = true            # false = skip the sites' own evaluation (saves one exchange per round)
 num-classes = 11
 dirichlet-alpha = 0.5       # non-IID level of the client partitions
-data-path = ""              # path to RML2016.10a_dict.pkl; empty = synthetic data
-backbone-path = ""          # path to a pre-trained backbone; empty = seeded random backbone
+data-path = ""              # e.g. "~/fedfleet/data/RML2016.10a_dict.pkl"; empty = synthetic data
+backbone-path = ""          # e.g. "~/fedfleet/backbone.pt"; empty = seeded random backbone
 metrics-dir = "~/fedfleet-runs"  # per-round JSONL metrics and checkpoints
 resume = false              # resume from <metrics-dir>/latest_checkpoint.pt

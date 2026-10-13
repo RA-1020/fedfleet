@@ -1,6 +1,6 @@
 # FedFleet
 
-Communication-efficient federated learning on a hybrid multicloud.
+Communication-efficient federated learning on a hybrid multicloud (SE-315 Cloud Computing, NUST SEECS).
 
 Each site keeps a **frozen, pre-trained backbone** and trains only a small **task head**. Only the head travels to the aggregator and back: **28,248 bytes per update instead of 1,847,058 (98.47% less)**. This repo is the Layer 1 starter: aggregation service (Σ), node service (N), per-round communication metrics, checkpoints, and dropout tolerance.
 
@@ -111,7 +111,7 @@ The next round finishes with 1/2 nodes. Then bring site 1 back; it rejoins at th
 scripts/start_node.sh 1 2
 ```
 
-`min-nodes=1` lets a round finish with a single site; `round-timeout` is how long the aggregator waits for a slow or missing site.
+`min-nodes=1` lets a round finish with a single site; `round-timeout` is how long the aggregator waits for a slow or missing site. Each round line shows `sites online` (sites the aggregator currently sees, out of the most it has seen) and `replied` (sites that answered this round). A site counts as offline once it misses heartbeats, which can take up to about a minute.
 
 ## 6. Real data and a real backbone
 
@@ -122,10 +122,10 @@ scripts/start_node.sh 1 2
    ```
 3. Train federated with both:
    ```bash
-   flwr run . --stream --run-config 'data-path="data/RML2016.10a_dict.pkl" backbone-path="backbone.pt"'
+   flwr run . --stream --run-config 'data-path="~/fedfleet/data/RML2016.10a_dict.pkl" backbone-path="~/fedfleet/backbone.pt"'
    ```
 
-Use absolute paths if the runs cannot find the files.
+Write paths with `~/` as shown. Flower runs the app from a copy in `~/.flwr/apps`, so relative paths like `backbone.pt` are not found, and `~/` also works on machines with different home folders (your Mac and a cloud VM).
 
 ## 7. Docker (local)
 
@@ -152,7 +152,8 @@ Every round appends one JSON line to `<metrics-dir>/rounds.jsonl` (default `~/fe
 
 | Field | Meaning |
 | --- | --- |
-| `nodes_asked`, `nodes_replied`, `nodes_dropped` | Participation and dropouts |
+| `nodes_online`, `nodes_registered` | Sites currently online, out of the most seen |
+| `nodes_asked`, `nodes_replied`, `nodes_dropped` | Participation and dropouts within the round |
 | `bytes_per_update`, `bytes_down`, `bytes_up` | Communication volume |
 | `train_round_seconds` | Time from sending the round to aggregating it |
 | `global_acc`, `global_loss` | Accuracy on the fixed public test set |
@@ -165,6 +166,7 @@ A checkpoint (`latest_checkpoint.pt`) is written after every round. Restart with
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `head-only` | `true` | Exchange only the task head (`false` = full-model baseline) |
+| `site-eval` | `true` | Sites also evaluate on their own data. `false` skips that exchange; in deployment mode each exchange costs about 3 s because Flower polls for replies every 3 s |
 | `num-server-rounds` | 10 | Rounds per run |
 | `min-nodes` | 2 | Minimum sites for a round to proceed |
 | `round-timeout` | 120 | Seconds to wait for slow or offline sites |

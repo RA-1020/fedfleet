@@ -33,10 +33,14 @@ class CommsFedAvg(FedAvg):
                         config: ConfigRecord, grid: Grid) -> Iterable[Message]:
         messages = list(super().configure_train(server_round, arrays, config, grid))
         payload = arrays.count_bytes()
+        online = len(list(grid.get_node_ids()))
+        self.max_seen = max(getattr(self, "max_seen", 0), online)
         self._t0 = time.perf_counter()
         self._row = {
             "round": server_round,
             "mode": "head-only" if self.head_only else "full-model",
+            "nodes_online": online,
+            "nodes_registered": self.max_seen,
             "nodes_asked": len(messages),
             "bytes_per_update": payload,
             "bytes_down": payload * len(messages),
@@ -93,10 +97,12 @@ class CommsFedAvg(FedAvg):
         with self.metrics_file.open("a") as f:
             f.write(json.dumps(self._row) + "\n")
         r = self._row
+        fmt = lambda v: "n/a" if v is None else f"{v:.4f}"
         print(
-            f"[FedFleet] round {r['round']}: {r.get('nodes_replied')}/{r.get('nodes_asked')} nodes, "
+            f"[FedFleet] round {r['round']}: {r.get('nodes_online')}/{r.get('nodes_registered')} sites online, "
+            f"{r.get('nodes_replied')}/{r.get('nodes_asked')} replied, "
             f"{r['bytes_per_update']:,} B per update, {r.get('bytes_up', 0):,} B up, "
-            f"{r.get('train_round_seconds')} s, global_acc={r.get('global_acc', float('nan')):.4f}, "
-            f"site_acc={r.get('eval_acc', float('nan')):.4f}"
+            f"{r.get('train_round_seconds')} s, global_acc={fmt(r.get('global_acc'))}, "
+            f"site_acc={fmt(r.get('eval_acc'))}"
         )
         self._row = {}

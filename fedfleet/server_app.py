@@ -45,7 +45,7 @@ def main(grid: Grid, context: Context) -> None:
         metrics_dir=metrics_dir,
         head_only=head_only,
         fraction_train=float(cfg["fraction-train"]),
-        fraction_evaluate=1.0,
+        fraction_evaluate=1.0 if bool(cfg["site-eval"]) else 0.0,
         min_train_nodes=min_nodes,
         min_evaluate_nodes=min_nodes,
         min_available_nodes=min_nodes,

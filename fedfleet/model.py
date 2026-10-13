@@ -7,6 +7,8 @@ network, which is the communication saving FedFleet is built around.
 
 from __future__ import annotations
 
+import os
+
 import torch
 from torch import nn
 
@@ -82,7 +84,8 @@ def build_model(num_classes: int, backbone_path: str = "", seed: int = 1234) -> 
     torch.manual_seed(seed)
     model = FedFleetNet(num_classes)
     if backbone_path:
-        state = torch.load(backbone_path, map_location="cpu", weights_only=True)
+        path = os.path.expanduser(backbone_path)
+        state = torch.load(path, map_location="cpu", weights_only=True)
         model.backbone.load_state_dict(state)
     return model
 
