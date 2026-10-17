@@ -66,18 +66,39 @@ def _synthetic(num_classes: int, per_class: int = 600) -> tuple[np.ndarray, np.n
     return np.concatenate(xs), np.concatenate(ys)
 
 
+def _spectrogram_cache_path(data_path: str) -> str:
+    return data_path + ".spectrograms.pt"
+
+
 def load_all(data_path: str, num_classes: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """All samples as spectrograms. Real data is converted once and cached on disk.
+
+    In deployment mode Flower starts a new process for every round, so without the disk
+    cache each site would re-read the raw file and redo every spectrogram each round.
+    """
     data_path = os.path.expanduser(data_path) if data_path else ""
     key = data_path or f"synthetic-{num_classes}"
-    if key not in _CACHE:
-        if data_path:
-            if not os.path.exists(data_path):
-                raise FileNotFoundError(f"RadioML file not found: {data_path}")
-            iq, y = _load_radioml(data_path)
-        else:
-            iq, y = _synthetic(num_classes)
-        x = torch.cat([iq_to_spectrogram(iq[i : i + 8192]) for i in range(0, len(iq), 8192)])
-        _CACHE[key] = (x, torch.from_numpy(y))
+    if key in _CACHE:
+        return _CACHE[key]
+    if data_path:
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(f"RadioML file not found: {data_path}")
+        cache = _spectrogram_cache_path(data_path)
+        if os.path.exists(cache) and os.path.getmtime(cache) >= os.path.getmtime(data_path):
+            saved = torch.load(cache, map_location="cpu", weights_only=True)
+            _CACHE[key] = (saved["x"], saved["y"])
+            return _CACHE[key]
+        iq, y = _load_radioml(data_path)
+    else:
+        iq, y = _synthetic(num_classes)
+    x = torch.cat([iq_to_spectrogram(iq[i : i + 8192]) for i in range(0, len(iq), 8192)])
+    _CACHE[key] = (x, torch.from_numpy(y))
+    if data_path:
+        # Write to a temporary file, then rename: two sites starting together can never
+        # read a half-written cache.
+        tmp = f"{cache}.{os.getpid()}.tmp"
+        torch.save({"x": x, "y": _CACHE[key][1]}, tmp)
+        os.replace(tmp, cache)
     return _CACHE[key]
 
 
@@ -101,8 +122,15 @@ def pretrain_set(data_path: str, num_classes: int) -> TensorDataset:
     return TensorDataset(x[idx], y[idx])
 
 
-def public_test_set(data_path: str, num_classes: int) -> TensorDataset:
-    """Fixed public test set for the server's convergence curve. Never used for training."""
+def public_test_set(data_path: str, num_classes: int, public_path: str = "") -> TensorDataset:
+    """Fixed public test set for the server's convergence curve. Never used for training.
+
+    With ``public_path`` (made by scripts/export_public_test.py) the aggregator reads only
+    the public split and never touches any site's data.
+    """
+    if public_path:
+        saved = torch.load(os.path.expanduser(public_path), map_location="cpu", weights_only=True)
+        return TensorDataset(saved["x"], saved["y"])
     x, y = load_all(data_path, num_classes)
     _, idx = _holdout_parts(len(y))
     return TensorDataset(x[idx], y[idx])

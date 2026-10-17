@@ -10,3 +10,4 @@ data/
 *.pem
 certificates/
 .DS_Store
+logs/

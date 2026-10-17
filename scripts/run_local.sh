@@ -1,17 +1,12 @@
 #!/usr/bin/env bash
-# Start a local Flower deployment: one SuperLink and N SuperNodes, as separate processes.
-# Usage: scripts/run_local.sh [num_nodes]   (default 2). Logs go to logs/.
+# Start a local Flower deployment: one SuperLink and N sites, as separate processes.
+# Usage: scripts/run_local.sh [num_sites]   (default 2). Logs go to logs/.
 set -euo pipefail
 N="${1:-2}"
-export FLWR_DISABLE_RUNTIME_DEPENDENCY_INSTALLATION=1   # use this venv, don't reinstall per run
+export FLWR_DISABLE_RUNTIME_DEPENDENCY_INSTALLATION=1
 mkdir -p logs
 nohup flower-superlink --insecure > logs/superlink.log 2>&1 &
-echo "SuperLink started (Fleet API :9092, Control API :8000)"
+echo "SuperLink started (sites :9092, control :8000)"
 sleep 5
-for ((i = 0; i < N; i++)); do
-  nohup flower-supernode --insecure --superlink 127.0.0.1:9092 \
-    --node-config "partition-id=$i num-partitions=$N" --port $((9094 + i)) \
-    > "logs/supernode-$i.log" 2>&1 &
-  echo "SuperNode $i started"
-done
+"$(dirname "$0")/run_sites.sh" 127.0.0.1 "$N"
 echo "Run training with:  flwr run . fedfleet-local --stream"

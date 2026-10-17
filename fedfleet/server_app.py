@@ -52,7 +52,8 @@ def main(grid: Grid, context: Context) -> None:
     )
     # Fixed public test set, disjoint from both the sites' data and the backbone's
     # pre-training data: one consistent convergence curve whichever sites are online.
-    public = public_test_set(str(cfg["data-path"]), int(cfg["num-classes"]))
+    public = public_test_set(str(cfg["data-path"]), int(cfg["num-classes"]),
+                             str(cfg["public-data-path"]))
     public = Subset(public, range(min(len(public), 4000)))
     public_loader = DataLoader(public, batch_size=512)
 

@@ -87,6 +87,8 @@ scripts/run_local.sh 2
 flwr run . fedfleet-local --stream --run-config "num-server-rounds=6 min-nodes=1 round-timeout=25.0"
 ```
 
+Each site gets its own Flower folder (`~/.flwr-sites/site-<i>`), so sites on one machine never race each other while unpacking the app. To point sites at the cloud aggregator instead, use `scripts/run_sites.sh fedfleet-agg 2`.
+
 Stop everything when finished:
 
 ```bash
@@ -111,21 +113,56 @@ The next round finishes with 1/2 nodes. Then bring site 1 back; it rejoins at th
 scripts/start_node.sh 1 2
 ```
 
+With the cloud aggregator, add its name: `scripts/start_node.sh 1 2 fedfleet-agg`.
+
 `min-nodes=1` lets a round finish with a single site; `round-timeout` is how long the aggregator waits for a slow or missing site. Each round line shows `sites online` (sites the aggregator currently sees, out of the most it has seen) and `replied` (sites that answered this round). A site counts as offline once it misses heartbeats, which can take up to about a minute.
 
 ## 6. Real data and a real backbone
 
-1. Download **RadioML 2016.10a** (`RML2016.10a_dict.pkl`) from DeepSig's datasets page and put it in `data/`. The download may require filling in a form.
-2. Pre-train and freeze the backbone on the public pre-training split. This uses the Mac GPU (MPS); Kaggle works too.
-   ```bash
-   python scripts/pretrain_backbone.py --data-path data/RML2016.10a_dict.pkl --epochs 15
-   ```
-3. Train federated with both:
-   ```bash
-   flwr run . --stream --run-config 'data-path="~/fedfleet/data/RML2016.10a_dict.pkl" backbone-path="~/fedfleet/backbone.pt"'
-   ```
+Use your own copy of **RadioML 2016.10a** (`RML2016.10a_dict.pkl`, about 600 MB). It is a public dataset from DeepSig, released for non-commercial use (cite O'Shea and West, 2016). Copy it into the project; do not move it out of other projects that use it.
 
-Write paths with `~/` as shown. Flower runs the app from a copy in `~/.flwr/apps`, so relative paths like `backbone.pt` are not found, and `~/` also works on machines with different home folders (your Mac and a cloud VM).
+```bash
+mkdir -p ~/fedfleet/data
+cp /path/to/RML2016.10a_dict.pkl ~/fedfleet/data/
+```
+
+Check it is the expected file (220 keys, each 1000 x 2 x 128):
+
+```bash
+python -c "import pickle; d = pickle.load(open('data/RML2016.10a_dict.pkl', 'rb'), encoding='latin1'); k = next(iter(d)); print(len(d), k, d[k].shape)"
+```
+
+The first run converts all samples to spectrograms and caches them next to the file (`RML2016.10a_dict.pkl.spectrograms.pt`, about 450 MB), so later rounds start quickly. `data/` is excluded from git.
+
+Pre-train and freeze the backbone on the public pre-training split (Mac GPU via MPS, or Kaggle):
+
+```bash
+python scripts/pretrain_backbone.py --data-path ~/fedfleet/data/RML2016.10a_dict.pkl --epochs 15
+```
+
+Export the aggregator's public test split. The aggregator gets only this small file, never the sites' data:
+
+```bash
+python scripts/export_public_test.py --data-path ~/fedfleet/data/RML2016.10a_dict.pkl
+ssh ubuntu@fedfleet-agg mkdir -p fedfleet/data
+rsync -av data/radioml_public_test.pt ubuntu@fedfleet-agg:~/fedfleet/data/
+rsync -av backbone.pt ubuntu@fedfleet-agg:~/fedfleet/
+```
+
+The backbone must be the same file on every machine (same path, `~/fedfleet/backbone.pt`), because the aggregator evaluates with it. When syncing code to the VM, always exclude `data/` so no site data reaches the aggregator:
+
+```bash
+rsync -av --exclude .venv --exclude .git --exclude __pycache__ --exclude logs --exclude data ~/fedfleet/ ubuntu@fedfleet-agg:~/fedfleet/
+```
+
+Train with the cloud aggregator, two sites on the Mac:
+
+```bash
+scripts/run_sites.sh fedfleet-agg 2
+flwr run . fedfleet-cloud --stream --run-config 'data-path="~/fedfleet/data/RML2016.10a_dict.pkl" public-data-path="~/fedfleet/data/radioml_public_test.pt" backbone-path="~/fedfleet/backbone.pt" site-eval=false'
+```
+
+Write paths with `~/` as shown. Flower runs the app from a copy in its own folder, so relative paths are not found, and `~/` works on machines with different home folders (your Mac and the VM).
 
 ## 7. Docker (local)
 
@@ -173,6 +210,7 @@ A checkpoint (`latest_checkpoint.pt`) is written after every round. Restart with
 | `local-epochs`, `batch-size`, `lr` | 1, 64, 0.005 | Local training |
 | `dirichlet-alpha` | 0.5 | How non-IID the site partitions are |
 | `data-path`, `backbone-path` | empty | Real data and pre-trained backbone |
+| `public-data-path` | empty | The aggregator's public test file (from `scripts/export_public_test.py`), so it never needs site data |
 | `metrics-dir` | `~/fedfleet-runs` | Metrics and checkpoints |
 
 ## Layout
