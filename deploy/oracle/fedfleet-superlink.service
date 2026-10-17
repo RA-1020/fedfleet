@@ -1,0 +1,13 @@
+[Unit]
+Description=FedFleet aggregator (Flower SuperLink)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+ExecStart=/home/ubuntu/fedfleet/deploy/oracle/run_superlink.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,72 @@
+╭────────────────── Update available ───────────────────╮
+│ A newer Flower version is available: 1.38.0 -> 1.39.0 │
+│ Upgrade: python -m pip install -U flwr                │
+╰───────────────────────────────────────────────────────╯
+[92mINFO [0m:      Starting Flower SuperNode
+[93mWARNING [0m:   Option `--insecure` was set. Starting insecure channel to fedfleet-agg:9092.
+INFO:     Started server process [83473]
+INFO:     Waiting for application startup.
+[92mINFO [0m:      FastAPI lifespan: startup
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:9094 (Press CTRL+C to quit)
+[92mINFO [0m:      SuperNode ID: 50316937289094815
+[92mINFO [0m:      Starting Flower SuperExec
+[92mINFO [0m:      
+[92mINFO [0m:      [RUN 7476644502126871508]
+[92mINFO [0m:      Receiving: train message (ID: 291187c7e021e5c85eab2acf3a544c45412d5c77076cca318795ac5bb3b9d5ca)
+[92mINFO [0m:      Received successfully
+[92mINFO [0m:      Start `flwr-clientapp` process
+Successfully installed fedfleet to /Users/ra/.flwr/apps/fedfleet.fedfleet.0.1.0.8e1eac06.
+[92mINFO [0m:      
+[92mINFO [0m:      
+[92mINFO [0m:      [RUN 7476644502126871508]
+[92mINFO [0m:      Sending: train message (ID: 6ac307967233ae81a0b99d880ef9add40970badba027fec0645ef34c87017058)
+[92mINFO [0m:      Sent successfully
+[92mINFO [0m:      
+[92mINFO [0m:      [RUN 7476644502126871508]
+[92mINFO [0m:      Receiving: train message (ID: 230e502ea81c36ef271698dd34b9baf185c1765f74f8b902294c8c54495d7b55)
+[92mINFO [0m:      Start `flwr-clientapp` process
+[92mINFO [0m:      Received successfully
+[92mINFO [0m:      
+[92mINFO [0m:      
+[92mINFO [0m:      [RUN 7476644502126871508]
+[92mINFO [0m:      Sending: train message (ID: 2fd18eaa07a6dfd7e8b032f8c003e2a18c87fd974e97e9ba8ebd4efcb51130d9)
+[92mINFO [0m:      Sent successfully
+[92mINFO [0m:      
+[92mINFO [0m:      [RUN 7476644502126871508]
+[92mINFO [0m:      Receiving: train message (ID: 49578dab631daf869c6dc12cfe0df69e9802a717a15c0124c20241d9ddebfc3e)
+[92mINFO [0m:      Start `flwr-clientapp` process
+[92mINFO [0m:      Received successfully
+[92mINFO [0m:      
+[92mINFO [0m:      
+[92mINFO [0m:      [RUN 7476644502126871508]
+[92mINFO [0m:      Sending: train message (ID: 797dbf6ecf10b3fa40361366ec30eba2fd10a56c975d2f0470fb9899bd2642b1)
+[92mINFO [0m:      Sent successfully
+[92mINFO [0m:      
+[92mINFO [0m:      [RUN 7476644502126871508]
+[92mINFO [0m:      Receiving: train message (ID: a2eb5f1e3ec417a9e95ea0dbd63a127b76adfbff553534562d9b091f8e225392)
+[92mINFO [0m:      Start `flwr-clientapp` process
+[92mINFO [0m:      Received successfully
+[92mINFO [0m:      
+[92mINFO [0m:      
+[92mINFO [0m:      [RUN 7476644502126871508]
+[92mINFO [0m:      Sending: train message (ID: 7b8a6d9026444576488cae1815407333e0f8d6dd34aada7822d5f947e4c73157)
+[92mINFO [0m:      Sent successfully
+[92mINFO [0m:      
+[92mINFO [0m:      [RUN 7476644502126871508]
+[92mINFO [0m:      Receiving: train message (ID: 4a5b7dbb51624d8065750a102d85c803d8b00ad8c9c73b4f34baaa7b857baafa)
+[92mINFO [0m:      Start `flwr-clientapp` process
+[92mINFO [0m:      Received successfully
+[92mINFO [0m:      
+[92mINFO [0m:      
+[92mINFO [0m:      [RUN 7476644502126871508]
+[92mINFO [0m:      Sending: train message (ID: 2b0c1774564f3578ef485dedbacf2f803d4143b1f1cea0ee82060fcad26cf330)
+[92mINFO [0m:      Sent successfully
+I1018 01:11:25.325852 28481796 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+[92mINFO [0m:      SuperNode terminated gracefully.
+[92mINFO [0m:      SuperExec terminated gracefully.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+[92mINFO [0m:      FastAPI lifespan: shutdown
+INFO:     Application shutdown complete.
+INFO:     Finished server process [83473]
