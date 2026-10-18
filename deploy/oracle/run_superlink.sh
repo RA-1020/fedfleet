@@ -24,4 +24,7 @@ else
   MODE="WARNING: no certificates found, running without TLS"
 fi
 echo "starting SuperLink on $TS (control :8000, sites :9092) - $MODE"
-exec "$DIR/.venv/bin/flower-superlink" "${SEC[@]}" --host "$TS" --fleet-api-address "$TS:9092"
+STATE="${FEDFLEET_STATE:-$HOME/fedfleet-state}"
+mkdir -p "$STATE"
+echo "state database: $STATE/state.db (survives restarts)"
+exec "$DIR/.venv/bin/flower-superlink" "${SEC[@]}" --host "$TS" --fleet-api-address "$TS:9092" --database "$STATE/state.db"
