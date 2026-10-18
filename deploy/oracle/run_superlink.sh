@@ -13,6 +13,15 @@ export PATH="$DIR/.venv/bin:$PATH"
 until TS="$(tailscale ip -4 2>/dev/null | head -n1)" && [ -n "$TS" ]; do
   echo "waiting for Tailscale..."; sleep 2
 done
-echo "starting SuperLink on $TS (control :8000, sites :9092)"
 cd "$DIR"
-exec "$DIR/.venv/bin/flower-superlink" --insecure --host "$TS" --fleet-api-address "$TS:9092"
+CERTS="$DIR/certificates"
+if [ -f "$CERTS/server.pem" ] && [ -f "$CERTS/server.key" ] && [ -f "$CERTS/ca.pem" ]; then
+  SEC=(--ssl-certfile "$CERTS/server.pem" --ssl-keyfile "$CERTS/server.key"
+       --ssl-ca-certfile "$CERTS/ca.pem" --enable-supernode-auth)
+  MODE="TLS on, only registered sites may join"
+else
+  SEC=(--insecure)
+  MODE="WARNING: no certificates found, running without TLS"
+fi
+echo "starting SuperLink on $TS (control :8000, sites :9092) - $MODE"
+exec "$DIR/.venv/bin/flower-superlink" "${SEC[@]}" --host "$TS" --fleet-api-address "$TS:9092"

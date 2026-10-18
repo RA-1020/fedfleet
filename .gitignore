@@ -11,3 +11,4 @@ data/
 certificates/
 .DS_Store
 logs/
+keys/

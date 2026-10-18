@@ -152,7 +152,7 @@ rsync -av backbone.pt ubuntu@fedfleet-agg:~/fedfleet/
 The backbone must be the same file on every machine (same path, `~/fedfleet/backbone.pt`), because the aggregator evaluates with it. When syncing code to the VM, always exclude `data/` so no site data reaches the aggregator:
 
 ```bash
-rsync -av --exclude .venv --exclude .git --exclude __pycache__ --exclude logs --exclude data ~/fedfleet/ ubuntu@fedfleet-agg:~/fedfleet/
+rsync -av --exclude .venv --exclude .git --exclude __pycache__ --exclude logs --exclude data --exclude certificates --exclude keys ~/fedfleet/ ubuntu@fedfleet-agg:~/fedfleet/
 ```
 
 Train with the cloud aggregator, two sites on the Mac:
@@ -164,7 +164,43 @@ flwr run . fedfleet-cloud --stream --run-config 'data-path="~/fedfleet/data/RML2
 
 Write paths with `~/` as shown. Flower runs the app from a copy in its own folder, so relative paths are not found, and `~/` works on machines with different home folders (your Mac and the VM).
 
-## 7. Docker (local)
+## 7. TLS and site authentication
+
+The aggregator encrypts every connection with TLS, and only sites whose public key has been registered may join. The scripts switch to secure mode automatically when the files exist: the launcher when `certificates/server.pem` is present on the VM, and the site scripts when `certificates/ca.pem` and `keys/site-<i>.key` are present on the Mac.
+
+Make the certificate authority and the aggregator's certificate on the Mac (use the VM's Tailscale IP):
+
+```bash
+deploy/tls/make_certs.sh fedfleet-agg 100.69.230.89
+```
+
+`certificates/ca.key` never leaves the Mac. Copy only the aggregator's three files to the VM and restart it:
+
+```bash
+ssh ubuntu@fedfleet-agg mkdir -p fedfleet/certificates
+rsync -av certificates/server.pem certificates/server.key certificates/ca.pem ubuntu@fedfleet-agg:~/fedfleet/certificates/
+ssh ubuntu@fedfleet-agg sudo systemctl restart fedfleet-superlink
+```
+
+Give each site an identity key, add a secure connection, and register the sites' public keys:
+
+```bash
+python deploy/tls/make_site_key.py site-0
+python deploy/tls/make_site_key.py site-1
+cat >> ~/.flwr/config.toml << 'EOT'
+
+[superlink.fedfleet-secure]
+address = "fedfleet-agg:8000"
+root-certificates = "/Users/ra/fedfleet/certificates/ca.pem"
+EOT
+flwr supernode register keys/site-0.pub fedfleet-secure --name site-0
+flwr supernode register keys/site-1.pub fedfleet-secure --name site-1
+flwr supernode list fedfleet-secure
+```
+
+Then train exactly as before, using the `fedfleet-secure` connection. `certificates/` and `keys/` are excluded from git, and the sync command above excludes them from the VM.
+
+## 8. Docker (local)
 
 ```bash
 docker compose -f deploy/local/docker-compose.yml up --build
