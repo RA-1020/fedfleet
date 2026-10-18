@@ -8,6 +8,7 @@ JSON line per round, and saves a checkpoint so a restarted aggregator can resume
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -19,8 +20,11 @@ from flwr.serverapp.strategy import FedAvg
 
 
 class CommsFedAvg(FedAvg):
-    def __init__(self, metrics_dir: str, head_only: bool, **kwargs) -> None:
+    def __init__(self, metrics_dir: str, head_only: bool, round_offset: int = 0, **kwargs) -> None:
         super().__init__(**kwargs)
+        # Rounds already done before a resume. Flower always counts from 1, so every round
+        # number written to the metrics file and the checkpoint adds this offset.
+        self.round_offset = round_offset
         self.dir = Path(metrics_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.metrics_file = self.dir / "rounds.jsonl"
@@ -37,7 +41,7 @@ class CommsFedAvg(FedAvg):
         self.max_seen = max(getattr(self, "max_seen", 0), online)
         self._t0 = time.perf_counter()
         self._row = {
-            "round": server_round,
+            "round": server_round + self.round_offset,
             "mode": "head-only" if self.head_only else "full-model",
             "nodes_online": online,
             "nodes_registered": self.max_seen,
@@ -60,7 +64,7 @@ class CommsFedAvg(FedAvg):
         if metrics is not None:
             self._row["train_loss"] = metrics.get("train_loss")
         if arrays is not None:
-            self._checkpoint(server_round, arrays)
+            self._checkpoint(server_round + self.round_offset, arrays)
         return arrays, metrics
 
     # ---------------------------------------------------------------- evaluation
@@ -75,10 +79,18 @@ class CommsFedAvg(FedAvg):
     def log_global(self, server_round: int, acc: float, loss: float) -> None:
         """Record accuracy on the fixed public test set (round 0 = before training)."""
         if server_round == 0:
+            if self.round_offset:
+                # After a resume this is the restored model, not a new round: log it as an
+                # event without a "round" key so it can never be mistaken for a training round.
+                row = {"event": "resumed", "resumed_from_round": self.round_offset,
+                       "global_acc": acc, "global_loss": loss, "timestamp": time.time()}
+                print(f"[FedFleet] resumed from round {self.round_offset}: global_acc={acc:.4f}")
+            else:
+                row = {"round": 0, "global_acc": acc, "global_loss": loss,
+                       "timestamp": time.time()}
+                print(f"[FedFleet] round 0: global_acc={acc:.4f}")
             with self.metrics_file.open("a") as f:
-                f.write(json.dumps({"round": 0, "global_acc": acc, "global_loss": loss,
-                                    "timestamp": time.time()}) + "\n")
-            print(f"[FedFleet] round 0: global_acc={acc:.4f}")
+                f.write(json.dumps(row) + "\n")
             return
         self._row["global_acc"] = acc
         self._row["global_loss"] = loss
@@ -88,7 +100,11 @@ class CommsFedAvg(FedAvg):
     def _checkpoint(self, server_round: int, arrays: ArrayRecord) -> None:
         state = {"round": server_round, "head_only": self.head_only,
                  "state_dict": arrays.to_torch_state_dict()}
-        torch.save(state, self.dir / "latest_checkpoint.pt")
+        # Write to a temporary file, then rename: a crash in the middle of saving can
+        # never leave a half-written latest_checkpoint.pt behind.
+        tmp = self.dir / "latest_checkpoint.pt.tmp"
+        torch.save(state, tmp)
+        os.replace(tmp, self.dir / "latest_checkpoint.pt")
 
     def _flush(self) -> None:
         if not self._row:

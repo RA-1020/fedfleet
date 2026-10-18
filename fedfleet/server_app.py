@@ -31,11 +31,24 @@ def main(grid: Grid, context: Context) -> None:
     state = part.state_dict()
 
     ckpt = Path(metrics_dir) / "latest_checkpoint.pt"
-    if bool(cfg["resume"]) and ckpt.exists():
-        saved = torch.load(ckpt, map_location="cpu", weights_only=True)
-        if saved["head_only"] == head_only:
-            state = saved["state_dict"]
-            print(f"[FedFleet] resuming from checkpoint of round {saved['round']}")
+    done_rounds = 0
+    if bool(cfg["resume"]):
+        if not ckpt.exists():
+            print(f"[FedFleet] resume requested but {ckpt} not found; starting from round 1")
+        else:
+            saved = torch.load(ckpt, map_location="cpu", weights_only=True)
+            if saved["head_only"] == head_only:
+                state = saved["state_dict"]
+                done_rounds = int(saved["round"])
+                print(f"[FedFleet] resuming from checkpoint of round {done_rounds}")
+            else:
+                print("[FedFleet] checkpoint was saved in the other mode (head-only or full "
+                      "model); starting from round 1")
+    remaining = num_rounds - done_rounds
+    if remaining <= 0:
+        print(f"[FedFleet] checkpoint is already at round {done_rounds} of {num_rounds}; "
+              "nothing to do")
+        return
 
     print(f"[FedFleet] mode={'head-only' if head_only else 'full-model'}, "
           f"exchanging {count_params(part):,} of {count_params(model):,} parameters")
@@ -44,6 +57,7 @@ def main(grid: Grid, context: Context) -> None:
     strategy = CommsFedAvg(
         metrics_dir=metrics_dir,
         head_only=head_only,
+        round_offset=done_rounds,
         fraction_train=float(cfg["fraction-train"]),
         fraction_evaluate=1.0 if bool(cfg["site-eval"]) else 0.0,
         min_train_nodes=min_nodes,
@@ -66,7 +80,7 @@ def main(grid: Grid, context: Context) -> None:
     result = strategy.start(
         grid=grid,
         initial_arrays=ArrayRecord(torch_state_dict=state),
-        num_rounds=num_rounds,
+        num_rounds=remaining,
         timeout=float(cfg["round-timeout"]),
         evaluate_fn=global_eval,
     )
