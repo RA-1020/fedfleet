@@ -3,6 +3,12 @@
 For every round it records bytes sent to nodes, bytes received back, how many nodes
 were asked and how many answered (dropouts), round duration and accuracy, writes one
 JSON line per round, and saves a checkpoint so a restarted aggregator can resume.
+
+Each round also lists every site that replied ("sites"): its sample count, its own
+measured setup and training time (site clock only, so exact), and its turnaround: the
+time from the aggregator creating the instruction to the site creating its reply. The
+turnaround compares two machines' clocks, so it is only as exact as their clock sync.
+Nodes that were asked but sent no valid reply are listed in "nodes_missing".
 """
 
 from __future__ import annotations
@@ -17,10 +23,28 @@ import torch
 from flwr.app import ArrayRecord, ConfigRecord, Message, MetricRecord
 from flwr.serverapp import Grid
 from flwr.serverapp.strategy import FedAvg
+from flwr.serverapp.strategy.strategy_utils import aggregate_metricrecords
+
+# Metrics that describe one site and mean nothing when averaged across sites.
+PER_SITE_ONLY = ("site",)
+
+
+def aggregate_train_metrics(records, weighting_key: str) -> MetricRecord:
+    """Flower's weighted average of the sites' metrics, minus the per-site-only keys."""
+    metrics = aggregate_metricrecords(records, weighting_key)
+    for key in PER_SITE_ONLY:
+        if key in metrics:
+            del metrics[key]
+    return metrics
+
+
+def _seconds(value) -> float | None:
+    return None if value is None else round(float(value), 3)
 
 
 class CommsFedAvg(FedAvg):
     def __init__(self, metrics_dir: str, head_only: bool, round_offset: int = 0, **kwargs) -> None:
+        kwargs.setdefault("train_metrics_aggr_fn", aggregate_train_metrics)
         super().__init__(**kwargs)
         # Rounds already done before a resume. Flower always counts from 1, so every round
         # number written to the metrics file and the checkpoint adds this offset.
@@ -31,6 +55,7 @@ class CommsFedAvg(FedAvg):
         self.head_only = head_only
         self._row: dict = {}
         self._t0 = 0.0
+        self._sent: dict[int, float] = {}   # node id -> when its instruction was created
 
     # ---------------------------------------------------------------- training
     def configure_train(self, server_round: int, arrays: ArrayRecord,
@@ -39,6 +64,7 @@ class CommsFedAvg(FedAvg):
         payload = arrays.count_bytes()
         online = len(list(grid.get_node_ids()))
         self.max_seen = max(getattr(self, "max_seen", 0), online)
+        self._sent = {m.metadata.dst_node_id: m.metadata.created_at for m in messages}
         self._t0 = time.perf_counter()
         self._row = {
             "round": server_round + self.round_offset,
@@ -59,7 +85,18 @@ class CommsFedAvg(FedAvg):
             "nodes_dropped": self._row.get("nodes_asked", 0) - len(ok),
             "bytes_up": sum(m.content["arrays"].count_bytes() for m in ok),
             "train_round_seconds": round(time.perf_counter() - self._t0, 3),
+            "sites": self._site_rows(ok),
+            "nodes_missing": sorted(set(self._sent) - {m.metadata.src_node_id for m in ok}),
         })
+        # Errors the SuperLink creates itself (for example "Node Unavailable" when a site
+        # stops sending heartbeats) come from the SuperLink's own id, not the failed site's,
+        # so only a sender that was actually asked is named; the failed site is always the
+        # one listed in nodes_missing.
+        errors = [{"node": m.metadata.src_node_id if m.metadata.src_node_id in self._sent else None,
+                   "code": int(m.error.code), "reason": str(m.error.reason)[:200]}
+                  for m in replies if m.has_error()]
+        if errors:
+            self._row["errors"] = errors
         arrays, metrics = super().aggregate_train(server_round, replies)
         if metrics is not None:
             self._row["train_loss"] = metrics.get("train_loss")
@@ -97,6 +134,25 @@ class CommsFedAvg(FedAvg):
         self._flush()
 
     # ---------------------------------------------------------------- helpers
+    def _site_rows(self, ok: list[Message]) -> list[dict]:
+        rows = []
+        for m in ok:
+            rec = next(iter(m.content.metric_records.values()), None) or {}
+            node = m.metadata.src_node_id
+            sent = self._sent.get(node)
+            site = rec.get("site")
+            rows.append({
+                "site": None if site is None else int(site),
+                "node": node,
+                "num_examples": None if rec.get("num-examples") is None else int(rec["num-examples"]),
+                "train_loss": rec.get("train_loss"),
+                "setup_seconds": _seconds(rec.get("setup_seconds")),
+                "train_seconds": _seconds(rec.get("train_seconds")),
+                "turnaround_seconds": None if sent is None else round(m.metadata.created_at - sent, 3),
+            })
+        rows.sort(key=lambda r: (r["site"] is None, r["site"] if r["site"] is not None else 0, r["node"]))
+        return rows
+
     def _checkpoint(self, server_round: int, arrays: ArrayRecord) -> None:
         state = {"round": server_round, "head_only": self.head_only,
                  "state_dict": arrays.to_torch_state_dict()}
@@ -121,4 +177,11 @@ class CommsFedAvg(FedAvg):
             f"{r.get('train_round_seconds')} s, global_acc={fmt(r.get('global_acc'))}, "
             f"site_acc={fmt(r.get('eval_acc'))}"
         )
+        for s in r.get("sites", []):
+            name = f"site {s['site']}" if s["site"] is not None else f"node {s['node']}"
+            n = f"{s['num_examples']:,}" if s["num_examples"] is not None else "?"
+            print(f"[FedFleet]   {name}: {n} samples, setup {s['setup_seconds']} s, "
+                  f"train {s['train_seconds']} s, turnaround {s['turnaround_seconds']} s")
+        for node in r.get("nodes_missing", []):
+            print(f"[FedFleet]   no reply from node {node}")
         self._row = {}

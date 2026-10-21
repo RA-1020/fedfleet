@@ -39,7 +39,9 @@ def _setup(msg: Message, context: Context):
 
 @app.train()
 def train_fn(msg: Message, context: Context) -> Message:
+    t_setup = time.perf_counter()
     cfg, head_only, model, part, trainloader, _ = _setup(msg, context)
+    setup_seconds = time.perf_counter() - t_setup   # model build + data load + partitioning
     t0 = time.perf_counter()
     loss = train(model, trainloader, int(cfg["local-epochs"]), float(cfg["lr"]),
                  head_only, pick_device())
@@ -48,7 +50,11 @@ def train_fn(msg: Message, context: Context) -> Message:
     metrics = MetricRecord({
         "train_loss": loss,
         "train_seconds": time.perf_counter() - t0,
+        "setup_seconds": setup_seconds,
         "bytes_up": arrays.count_bytes(),
+        # Which site this is, so the aggregator can log per-site timing. It is the site's
+        # partition number from its own node config, not anything about its data.
+        "site": int(context.node_config["partition-id"]),
         "num-examples": len(trainloader.dataset),
     })
     return Message(RecordDict({"arrays": arrays, "metrics": metrics}), reply_to=msg)
