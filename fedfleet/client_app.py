@@ -37,11 +37,29 @@ def _setup(msg: Message, context: Context):
     return cfg, head_only, model, part, trainloader, testloader
 
 
+def _reseed(cfg, msg: Message, context: Context) -> None:
+    """Optional training seed, so repeated runs can differ.
+
+    build_model() seeds torch with a fixed value, so every site starts every round from
+    the same random state (same shuffling): with seed = -1 (default) that stays as it is,
+    and identical settings give identical runs. With seed >= 0 each site reseeds here
+    from the run's seed, its own site number and the round, so runs with different seeds
+    shuffle differently while each one stays repeatable.
+    """
+    seed = int(cfg.get("seed", -1))
+    if seed < 0:
+        return
+    site = int(context.node_config["partition-id"])
+    server_round = int(msg.content["config"]["server-round"])
+    torch.manual_seed(seed * 1_000_003 + site * 1_009 + server_round)
+
+
 @app.train()
 def train_fn(msg: Message, context: Context) -> Message:
     t_setup = time.perf_counter()
     cfg, head_only, model, part, trainloader, _ = _setup(msg, context)
     setup_seconds = time.perf_counter() - t_setup   # model build + data load + partitioning
+    _reseed(cfg, msg, context)
     t0 = time.perf_counter()
     loss = train(model, trainloader, int(cfg["local-epochs"]), float(cfg["lr"]),
                  head_only, pick_device())

@@ -31,7 +31,8 @@ min-nodes = 2               # a round needs at least this many nodes (dropout to
 round-timeout = 120.0       # seconds; slower or offline nodes are skipped for the round
 local-epochs = 1
 batch-size = 64
-lr = 0.005
+lr = 0.001                  # head-only rate chosen in E9 (21 Oct); full model uses lr=0.0005
+seed = -1                   # >= 0: training seed for repetitions; -1 = fixed seed (identical reruns)
 head-only = true            # true = exchange only the task head; false = full model (E9 baseline)
 site-eval = true            # false = skip the sites' own evaluation (saves one exchange per round)
 num-classes = 11
