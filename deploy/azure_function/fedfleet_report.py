@@ -8,6 +8,7 @@ from __future__ import annotations
 import html
 import json
 import time
+from pathlib import Path
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,6 +17,30 @@ from concurrent.futures import ThreadPoolExecutor
 
 API_VERSION = "2021-12-02"
 SUFFIX = "rounds.jsonl"
+
+
+_RATE_CARD = None
+
+
+def rate_card():
+    """(rates, run_costs) from the bundled cost code and rate card, or (None, None) if absent.
+
+    In the deployed zip these are fedfleet_cost.py and rates.toml (see build_zip.sh); in the repo
+    they are fedfleet/cost.py and deploy/rates.toml. Same code and same prices as scripts/cost_report.py.
+    """
+    global _RATE_CARD
+    if _RATE_CARD is None:
+        here = Path(__file__).resolve().parent
+        try:
+            try:
+                from fedfleet_cost import load_rates, run_costs
+            except ImportError:
+                from fedfleet.cost import load_rates, run_costs
+            card = next(p for p in (here / "rates.toml", here.parent / "rates.toml") if p.exists())
+            _RATE_CARD = (load_rates(card), run_costs)
+        except (ImportError, StopIteration, OSError, ValueError):
+            _RATE_CARD = (None, None)
+    return _RATE_CARD
 
 
 def split_sas(url: str) -> tuple[str, str]:
@@ -71,15 +96,27 @@ def parse_rows(text: str) -> tuple[list[dict], int]:
     return rows, bad
 
 
-def summarize(rows: list[dict], detail: bool = False) -> dict:
-    """One run: rounds, accuracy, resumes, dropouts, traffic and cost (list prices)."""
+def summarize(rows: list[dict], detail: bool = False, rates: dict | None = None, costing=None) -> dict:
+    """One run: rounds, accuracy, resumes, dropouts, traffic and cost (list prices).
+
+    A round's cost is the "cost" field the aggregator logged, if any. Rounds from before cost
+    logging existed are costed from the rate card (rates + costing = fedfleet.cost.run_costs),
+    which is the same calculation. cost_basis says which was used.
+    """
     train = [r for r in rows if isinstance(r.get("round"), int) and r["round"] >= 1]
     scored = [r for r in rows if isinstance(r.get("round"), int) and "global_acc" in r]
-    costed = [r for r in train if isinstance(r.get("cost"), dict)]
+    computed = {}
+    if rates is not None and costing is not None:
+        computed = {id(row): c for row, c in costing(rows, rates)}
+    logged = [r for r in train if isinstance(r.get("cost"), dict)]
+    costs = [(r, r["cost"] if isinstance(r.get("cost"), dict) else computed.get(id(r))) for r in train]
+    costs = [(r, c) for r, c in costs if c]
 
-    def cost(k: str) -> float:
-        return sum(float(r["cost"].get(k, 0.0)) for r in costed)
+    def cost(k: str):
+        return sum(float(c.get(k, 0.0)) for _, c in costs) if costs else None
 
+    basis = "none" if not costs else "logged" if len(logged) == len(costs) else \
+        "computed" if not logged else "mixed"
     stamps = [r["timestamp"] for r in rows if isinstance(r.get("timestamp"), (int, float))]
     out = {
         "rounds": len(train),
@@ -90,7 +127,8 @@ def summarize(rows: list[dict], detail: bool = False) -> dict:
         "nodes_dropped": sum(int(r.get("nodes_dropped", 0)) for r in train),
         "bytes_up": sum(int(r.get("bytes_up", 0)) for r in train),
         "bytes_down": sum(int(r.get("bytes_down", 0)) for r in train),
-        "costed_rounds": len(costed),
+        "costed_rounds": len(costs),
+        "cost_basis": basis,
         "provider_usd": cost("provider_usd"),
         "customer_usd": cost("customer_usd"),
         "customer_busy_usd": cost("customer_busy_usd"),
@@ -100,13 +138,14 @@ def summarize(rows: list[dict], detail: bool = False) -> dict:
         "last_timestamp": max(stamps) if stamps else None,
     }
     if detail:
+        by_id = {id(r): c for r, c in costs}
         out["per_round"] = [{
             "round": r["round"], "global_acc": r.get("global_acc"), "global_loss": r.get("global_loss"),
             "replied": r.get("nodes_replied"), "asked": r.get("nodes_asked"),
-            "wall_seconds": (r.get("cost") or {}).get("wall_seconds"),
-            "provider_usd": (r.get("cost") or {}).get("provider_usd"),
-            "customer_usd": (r.get("cost") or {}).get("customer_usd"),
-            "total_usd": (r.get("cost") or {}).get("total_usd"),
+            "wall_seconds": (by_id.get(id(r)) or {}).get("wall_seconds"),
+            "provider_usd": (by_id.get(id(r)) or {}).get("provider_usd"),
+            "customer_usd": (by_id.get(id(r)) or {}).get("customer_usd"),
+            "total_usd": (by_id.get(id(r)) or {}).get("total_usd"),
         } for r in train]
     return out
 
@@ -117,6 +156,8 @@ def build_report(sas_url: str, run: str | None = None, timeout: float = 20.0) ->
     if run:
         blobs = [b for b in blobs if run_name(b) == run]
 
+    rates, costing = rate_card()
+
     def one(blob: str) -> dict:
         try:
             text = _get(f"{base}/{urllib.parse.quote(blob, safe='/')}?{sas}", timeout).decode("utf-8", "replace")
@@ -125,7 +166,7 @@ def build_report(sas_url: str, run: str | None = None, timeout: float = 20.0) ->
         except (urllib.error.URLError, OSError, TimeoutError) as e:
             return {"run": run_name(blob), "error": type(e).__name__}
         rows, bad = parse_rows(text)
-        return {"run": run_name(blob), "bad_lines": bad, **summarize(rows, detail=bool(run))}
+        return {"run": run_name(blob), "bad_lines": bad, **summarize(rows, detail=bool(run), rates=rates, costing=costing)}
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         runs = list(pool.map(one, blobs))
@@ -133,8 +174,10 @@ def build_report(sas_url: str, run: str | None = None, timeout: float = 20.0) ->
     return {
         "generated_unix": time.time(),
         "container": base.rsplit("/", 1)[-1],
-        "note": "Costs are list prices before free tiers and credits; only rounds that carry a cost field are summed "
-                "(older runs have none).",
+        "note": "Costs are list prices before free tiers and credits. cost_basis: logged = the aggregator wrote the cost "
+                "per round; computed = rounds from before cost logging, costed from the bundled rate card by the same "
+                "code as scripts/cost_report.py; none = no cost available.",
+        "rate_card_loaded": rates is not None,
         "runs": runs,
     }
 
@@ -145,7 +188,7 @@ def _usd(v) -> str:
 
 def render_html(report: dict) -> str:
     e = html.escape
-    head = ("run", "rounds", "costed", "final acc", "resumes", "dropped", "wall s", "provider", "customer", "total")
+    head = ("run", "rounds", "cost basis", "final acc", "resumes", "dropped", "wall s", "provider", "customer", "total")
     lines = [
         "<!doctype html><meta charset=utf-8><title>FedFleet round report</title>",
         "<style>body{font:14px system-ui;margin:2rem}table{border-collapse:collapse}"
@@ -158,8 +201,9 @@ def render_html(report: dict) -> str:
             lines.append(f"<tr><td>{e(r['run'])}</td><td colspan=9>could not read: {e(r['error'])}</td></tr>")
             continue
         acc = "-" if r["final_acc"] is None else f"{r['final_acc']:.4f}"
-        cells = [r["run"], r["rounds"], r["costed_rounds"], acc, r["resumes"], r["nodes_dropped"],
-                 f"{r['wall_seconds']:.0f}", _usd(r["provider_usd"]), _usd(r["customer_usd"]), _usd(r["total_usd"])]
+        wall = "-" if r["wall_seconds"] is None else f"{r['wall_seconds']:.0f}"
+        cells = [r["run"], r["rounds"], r["cost_basis"], acc, r["resumes"], r["nodes_dropped"],
+                 wall, _usd(r["provider_usd"]), _usd(r["customer_usd"]), _usd(r["total_usd"])]
         lines.append("<tr>" + "".join(f"<td>{e(str(c))}</td>" for c in cells) + "</tr>")
     lines.append("</table>")
     return "\n".join(lines)

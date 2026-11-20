@@ -101,9 +101,19 @@ def test_summarize_matches_offline_calculator():
     assert s["final_acc"] == 0.5          # last round's accuracy, not the 0.497 on the "resumed" event row
 
 
-def test_old_run_has_no_cost():
+def test_old_run_has_no_cost_without_rate_card():
     s = fr.summarize(RUN_B)
-    assert s["costed_rounds"] == 0 and s["total_usd"] == 0.0 and s["rounds"] == 3
+    assert s["costed_rounds"] == 0 and s["total_usd"] is None and s["cost_basis"] == "none" and s["rounds"] == 3
+
+
+def test_old_run_is_costed_from_rate_card():
+    rates, costing = fr.rate_card()
+    assert rates is not None
+    s = fr.summarize(RUN_B, rates=rates, costing=costing)
+    want = sum(c["total_usd"] for _, c in run_costs(ROWS, RATES))
+    assert s["costed_rounds"] == 3 and s["cost_basis"] == "computed" and math.isclose(s["total_usd"], want)
+    assert fr.summarize(RUN_A, rates=rates, costing=costing)["cost_basis"] == "logged"
+    assert math.isclose(fr.summarize(RUN_A, rates=rates, costing=costing)["total_usd"], want)
 
 
 def test_build_report_against_mock_blob():
@@ -131,6 +141,7 @@ def test_full_build_report_over_mock(monkeypatch=None):
         rep = fr.build_report("ignored")
         assert [r["run"] for r in rep["runs"]][0] == "fedfleet-runs-crash"     # newest last_timestamp first
         assert len(rep["runs"]) == 3 and rep["runs"][0]["costed_rounds"] == 3
+        assert {r["run"]: r["cost_basis"] for r in rep["runs"]}["fedfleet-runs-old"] == "computed" and rep["rate_card_loaded"]
         one = fr.build_report("ignored", run="fedfleet-runs-crash")
         assert len(one["runs"]) == 1 and len(one["runs"][0]["per_round"]) == 3
         page = fr.render_html(rep)
