@@ -12,6 +12,7 @@ from flwr.app import MetricRecord
 from torch.utils.data import DataLoader, Subset
 
 from fedfleet.comms import CommsFedAvg
+from fedfleet.cost import load_rates
 from fedfleet.data import public_test_set
 from fedfleet.model import build_model, count_params, exchanged_module
 from fedfleet.task import evaluate, pick_device
@@ -53,11 +54,20 @@ def main(grid: Grid, context: Context) -> None:
     print(f"[FedFleet] mode={'head-only' if head_only else 'full-model'}, "
           f"exchanging {count_params(part):,} of {count_params(model):,} parameters")
 
+    rates = None
+    rates_path = str(cfg.get("rates-path", ""))
+    if rates_path:
+        if Path(rates_path).expanduser().exists():
+            rates = load_rates(rates_path)
+        else:
+            print(f"[FedFleet] rate card {rates_path} not found; cost per round is off")
+
     min_nodes = int(cfg["min-nodes"])
     strategy = CommsFedAvg(
         metrics_dir=metrics_dir,
         head_only=head_only,
         round_offset=done_rounds,
+        rates=rates,
         fraction_train=float(cfg["fraction-train"]),
         fraction_evaluate=1.0 if bool(cfg["site-eval"]) else 0.0,
         min_train_nodes=min_nodes,

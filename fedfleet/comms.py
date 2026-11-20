@@ -25,6 +25,8 @@ from flwr.serverapp import Grid
 from flwr.serverapp.strategy import FedAvg
 from flwr.serverapp.strategy.strategy_utils import aggregate_metricrecords
 
+from fedfleet.cost import round_cost
+
 # Metrics that describe one site and mean nothing when averaged across sites.
 PER_SITE_ONLY = ("site",)
 
@@ -43,9 +45,13 @@ def _seconds(value) -> float | None:
 
 
 class CommsFedAvg(FedAvg):
-    def __init__(self, metrics_dir: str, head_only: bool, round_offset: int = 0, **kwargs) -> None:
+    def __init__(self, metrics_dir: str, head_only: bool, round_offset: int = 0,
+                 rates: dict | None = None, **kwargs) -> None:
         kwargs.setdefault("train_metrics_aggr_fn", aggregate_train_metrics)
         super().__init__(**kwargs)
+        # Rate card for cost per round (fedfleet/cost.py); None = no cost columns.
+        self.rates = rates
+        self._last_ts: float | None = None   # timestamp of the previous row (round wall time)
         # Rounds already done before a resume. Flower always counts from 1, so every round
         # number written to the metrics file and the checkpoint adds this offset.
         self.round_offset = round_offset
@@ -128,6 +134,7 @@ class CommsFedAvg(FedAvg):
                 print(f"[FedFleet] round 0: global_acc={acc:.4f}")
             with self.metrics_file.open("a") as f:
                 f.write(json.dumps(row) + "\n")
+            self._last_ts = row["timestamp"]
             return
         self._row["global_acc"] = acc
         self._row["global_loss"] = loss
@@ -165,7 +172,14 @@ class CommsFedAvg(FedAvg):
     def _flush(self) -> None:
         if not self._row:
             return
-        self._row["timestamp"] = time.time()
+        now = time.time()
+        self._row["timestamp"] = now
+        if self.rates is not None:
+            wall = None if self._last_ts is None else now - self._last_ts
+            c = round_cost(self._row, self.rates, wall)
+            self._row["cost"] = {k: c[k] for k in (
+                "wall_seconds", "provider_usd", "customer_usd", "customer_busy_usd", "total_usd")}
+        self._last_ts = now
         with self.metrics_file.open("a") as f:
             f.write(json.dumps(self._row) + "\n")
         r = self._row
@@ -184,4 +198,9 @@ class CommsFedAvg(FedAvg):
                   f"train {s['train_seconds']} s, turnaround {s['turnaround_seconds']} s")
         for node in r.get("nodes_missing", []):
             print(f"[FedFleet]   no reply from node {node}")
+        if "cost" in r:
+            c = r["cost"]
+            print(f"[FedFleet]   cost (list, before free tiers): provider ${c['provider_usd']:.6f}, "
+                  f"customer ${c['customer_usd']:.6f}, total ${c['total_usd']:.6f} "
+                  f"over {c['wall_seconds']} s")
         self._row = {}

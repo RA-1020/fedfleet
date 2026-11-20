@@ -1,0 +1,42 @@
+# Rate card for cost per round (fedfleet/cost.py). List prices in USD, before free tiers and
+# credits. Each rate names its source and the date it was read; re-check before quoting.
+
+[aggregator]
+name = "oracle-a1-mumbai"
+shape = "VM.Standard.A1.Flex"
+ocpus = 2
+memory_gb = 12
+# oracle.com/cloud/compute/arm (read 20 Nov 2026): $0.01 per OCPU-hour, $0.0015 per GB-hour.
+# oracle.com/cloud/iaas-paas lists A1.Flex at $0.013106 and $0.0019659 (same date); which one
+# applies to this tenancy is not confirmed. The shape is inside the Always Free allowance
+# (3,000 OCPU-hours and 18,000 GB-hours a month), so the bill for it is $0.
+usd_per_ocpu_hour = 0.01
+usd_per_gb_hour = 0.0015
+# OCI outbound data: not looked up yet; 0 until confirmed.
+egress_usd_per_gb = 0.0
+
+[sites.0]
+name = "mac-islamabad"   # the data owner's own hardware: no cloud bill
+usd_per_hour = 0.0
+egress_usd_per_gb = 0.0
+
+[sites.1]
+name = "mac-islamabad"
+usd_per_hour = 0.0
+egress_usd_per_gb = 0.0
+
+[sites.2]
+name = "azure-b2s-indiasouthcentral"
+# B2s Linux pay-as-you-go: $0.0448 per hour in Central India (azurespeed.com and azurehub.org,
+# read 20 Nov 2026). No published figure found for India South Central; Central India is used
+# as a stand-in. Check the real meter in Cost analysis before quoting.
+usd_per_hour = 0.0448
+# Azure internet egress from Asia: first 100 GB a month free, then $0.12 per GB
+# (azure.microsoft.com/pricing/details/data-transfers, read 20 Nov 2026). Marginal list rate.
+egress_usd_per_gb = 0.12
+
+# A site asked in a round but with no reply is charged at this rate (its id is unknown).
+[default_site]
+name = "unknown"
+usd_per_hour = 0.0
+egress_usd_per_gb = 0.0

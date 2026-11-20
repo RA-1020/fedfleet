@@ -42,3 +42,4 @@ public-data-path = ""       # e.g. "~/fedfleet/data/radioml_public_test.pt": the
 backbone-path = ""          # e.g. "~/fedfleet/backbone.pt"; empty = seeded random backbone
 metrics-dir = "~/fedfleet-runs"  # per-round JSONL metrics and checkpoints
 resume = false              # resume from <metrics-dir>/latest_checkpoint.pt
+rates-path = ""             # e.g. "~/fedfleet/deploy/rates.toml" on the aggregator; empty = no cost per round
