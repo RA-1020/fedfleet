@@ -1,0 +1,8 @@
+# /etc/grafana/provisioning/dashboards/fedfleet.yaml
+apiVersion: 1
+providers:
+  - name: fedfleet
+    folder: FedFleet
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

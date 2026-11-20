@@ -1,0 +1,14 @@
+[Unit]
+Description=FedFleet metrics exporter for Prometheus (reads rounds.jsonl, read-only)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+# Tailscale address only, like the aggregator: never reachable from the public internet.
+ExecStart=/usr/bin/python3 /home/ubuntu/fedfleet/deploy/monitoring/fedfleet_exporter.py --listen 100.69.230.89:9101
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

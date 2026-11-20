@@ -1,0 +1,9 @@
+# /etc/grafana/provisioning/datasources/fedfleet.yaml
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: fedfleet-prom
+    type: prometheus
+    access: proxy
+    url: http://100.69.230.89:9090
+    isDefault: true

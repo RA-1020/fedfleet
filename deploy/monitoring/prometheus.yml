@@ -1,0 +1,11 @@
+# /etc/prometheus/prometheus.yml on the aggregator VM.
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: fedfleet
+    scrape_interval: 5s          # rounds take 20-60 s, so every round is seen
+    static_configs:
+      - targets: ["100.69.230.89:9101"]
+  - job_name: prometheus
+    static_configs:
+      - targets: ["100.69.230.89:9090"]

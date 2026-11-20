@@ -1,0 +1,547 @@
+{
+ "uid": "fedfleet-rounds",
+ "title": "FedFleet rounds",
+ "schemaVersion": 39,
+ "version": 1,
+ "refresh": "5s",
+ "time": {
+  "from": "now-30m",
+  "to": "now"
+ },
+ "templating": {
+  "list": [
+   {
+    "name": "run",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "fedfleet-prom"
+    },
+    "query": "label_values(fedfleet_round, run)",
+    "refresh": 2,
+    "multi": true,
+    "includeAll": true,
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    }
+   }
+  ]
+ },
+ "panels": [
+  {
+   "type": "stat",
+   "title": "Round",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none"
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "none"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_round{run=~\"$run\"}"
+    }
+   ],
+   "id": 1
+  },
+  {
+   "type": "stat",
+   "title": "Sites replied (latest round)",
+   "description": "Replied in the latest round; asked is in the Sites panel",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 6,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none"
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "none"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_nodes_replied{run=~\"$run\"}"
+    }
+   ],
+   "id": 2
+  },
+  {
+   "type": "stat",
+   "title": "Global accuracy",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "none"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_global_accuracy{run=~\"$run\"}"
+    }
+   ],
+   "id": 3
+  },
+  {
+   "type": "stat",
+   "title": "Run cost so far (list)",
+   "description": "List prices before free tiers and credits",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 18,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "currencyUSD",
+     "decimals": 4
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "none"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "sum(fedfleet_cost_usd_total{run=~\"$run\"})"
+    }
+   ],
+   "id": 4
+  },
+  {
+   "type": "timeseries",
+   "title": "Global accuracy (public test set)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 4,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "lineInterpolation": "stepAfter",
+      "stacking": {
+       "mode": "none"
+      }
+     },
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_global_accuracy{run=~\"$run\"}",
+     "legendFormat": "{{run}}"
+    }
+   ],
+   "id": 5
+  },
+  {
+   "type": "timeseries",
+   "title": "Sites per round",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 4,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineInterpolation": "stepAfter",
+      "stacking": {
+       "mode": "none"
+      }
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_nodes_online{run=~\"$run\"}",
+     "legendFormat": "online {{run}}"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_nodes_asked{run=~\"$run\"}",
+     "legendFormat": "asked {{run}}"
+    },
+    {
+     "refId": "C",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_nodes_replied{run=~\"$run\"}",
+     "legendFormat": "replied {{run}}"
+    }
+   ],
+   "id": 6
+  },
+  {
+   "type": "timeseries",
+   "title": "Bytes per round",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 12,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "decbytes",
+     "custom": {
+      "lineInterpolation": "stepAfter",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_round_bytes_up{run=~\"$run\"}",
+     "legendFormat": "up {{run}}"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_round_bytes_down{run=~\"$run\"}",
+     "legendFormat": "down {{run}}"
+    }
+   ],
+   "id": 7
+  },
+  {
+   "type": "timeseries",
+   "title": "Round time",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 12,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "lineInterpolation": "stepAfter",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_round_seconds{run=~\"$run\"}",
+     "legendFormat": "training exchange {{run}}"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_round_wall_seconds{run=~\"$run\"}",
+     "legendFormat": "wall, row to row {{run}}"
+    }
+   ],
+   "id": 8
+  },
+  {
+   "type": "timeseries",
+   "title": "Cost per round (list prices, before free tiers)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 20,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "currencyUSD",
+     "custom": {
+      "lineInterpolation": "stepAfter",
+      "stacking": {
+       "mode": "normal"
+      }
+     },
+     "decimals": 6
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_round_cost_usd{run=~\"$run\"}",
+     "legendFormat": "{{side}} {{run}}"
+    }
+   ],
+   "id": 9
+  },
+  {
+   "type": "timeseries",
+   "title": "Cumulative cost (list prices)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 20,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "currencyUSD",
+     "custom": {
+      "lineInterpolation": "stepAfter",
+      "stacking": {
+       "mode": "normal"
+      }
+     },
+     "decimals": 4
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_cost_usd_total{run=~\"$run\"}",
+     "legendFormat": "{{side}} {{run}}"
+    }
+   ],
+   "id": 10
+  },
+  {
+   "type": "timeseries",
+   "title": "Site training time",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 28,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "lineInterpolation": "stepAfter",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_site_train_seconds{run=~\"$run\"}",
+     "legendFormat": "site {{site}} {{run}}"
+    }
+   ],
+   "id": 11
+  },
+  {
+   "type": "timeseries",
+   "title": "Site turnaround (two clocks)",
+   "description": "Instruction created on the aggregator to reply created on the site; compares two machines' clocks",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 28,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "lineInterpolation": "stepAfter",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_site_turnaround_seconds{run=~\"$run\"}",
+     "legendFormat": "site {{site}} {{run}}"
+    }
+   ],
+   "id": 12
+  }
+ ]
+}
