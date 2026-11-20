@@ -2,7 +2,7 @@
  "uid": "fedfleet-rounds",
  "title": "FedFleet rounds",
  "schemaVersion": 39,
- "version": 1,
+ "version": 2,
  "refresh": "5s",
  "time": {
   "from": "now-30m",
@@ -17,14 +17,17 @@
      "type": "prometheus",
      "uid": "fedfleet-prom"
     },
-    "query": "label_values(fedfleet_round, run)",
+    "query": {
+     "query": "query_result(sort_desc(fedfleet_round_timestamp_seconds))",
+     "refId": "run"
+    },
     "refresh": 2,
-    "multi": true,
-    "includeAll": true,
-    "current": {
-     "text": "All",
-     "value": "$__all"
-    }
+    "multi": false,
+    "includeAll": false,
+    "current": {},
+    "sort": 0,
+    "regex": "/run=\"([^\"]+)\"/",
+    "description": "One run at a time, most recently updated first"
    }
   ]
  },
