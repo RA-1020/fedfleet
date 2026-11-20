@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from fedfleet.cost import load_rates, round_cost  # noqa: E402
 
-DEFAULT_GLOBS = ["~/fedfleet-runs*/rounds.jsonl", "~/fedfleet-runs/*/rounds.jsonl"]
+DEFAULT_GLOBS = ["~/fedfleet-runs*/rounds.jsonl", "~/fedfleet-runs*/*/rounds.jsonl"]
 
 
 class Run:
@@ -144,6 +144,14 @@ def render(runs: list[Run]) -> str:
     return "\n".join(out) + "\n"
 
 
+def run_name(path: Path) -> str:
+    """Folder of the run, relative to home: fedfleet-runs-crash, fedfleet-runs-e9/head-lr0.001-r1."""
+    try:
+        return str(path.parent.resolve().relative_to(Path.home().resolve()))
+    except ValueError:
+        return path.parent.name
+
+
 class Collector:
     def __init__(self, patterns: list[str], rates: dict | None):
         self.patterns, self.rates = patterns, rates
@@ -157,7 +165,7 @@ class Collector:
                     path = Path(p)
                     key = str(path.resolve())
                     if key not in self.runs:
-                        self.runs[key] = Run(path, path.parent.name)
+                        self.runs[key] = Run(path, run_name(path))
             for r in self.runs.values():
                 r.poll(self.rates)
             return render(list(self.runs.values()))
