@@ -1,0 +1,13 @@
+[Unit]
+Description=FedFleet copy of checkpoints and metrics to Azure Blob storage (changed files only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+ExecStart=/usr/bin/python3 /home/ubuntu/fedfleet/deploy/backup/blob_backup.py --sas-file /home/ubuntu/.fedfleet-blob-sas
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
