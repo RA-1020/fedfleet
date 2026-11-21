@@ -6,7 +6,7 @@ compatibility_date = "2026-11-01"
 # Fill in the service id from `npx wrangler vpc service create ...` (see README).
 [[vpc_services]]
 binding = "CONTROL_API"
-service_id = "REPLACE_WITH_VPC_SERVICE_ID"
+service_id = "01a1fdac-ecef-7c33-a2ef-daa387edcf25"
 remote = true
 
 # 20 requests per minute per caller IP and method.
