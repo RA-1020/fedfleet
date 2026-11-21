@@ -1,0 +1,16 @@
+name = "fedfleet-gateway"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+
+# Workers VPC Service pointing at 127.0.0.1:8088 on the Oracle VM through its Cloudflare Tunnel.
+# Fill in the service id from `npx wrangler vpc service create ...` (see README).
+[[vpc_services]]
+binding = "CONTROL_API"
+service_id = "REPLACE_WITH_VPC_SERVICE_ID"
+remote = true
+
+# 20 requests per minute per caller IP and method.
+[[ratelimits]]
+name = "LIMITER"
+namespace_id = "1001"
+simple = { limit = 20, period = 60 }
