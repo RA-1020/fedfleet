@@ -1,0 +1,15 @@
+[Unit]
+Description=FedFleet control API (localhost only; reached through the Cloudflare Worker gateway)
+After=network-online.target fedfleet-superlink.service
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/fedfleet/deploy/control_api
+EnvironmentFile=/etc/fedfleet/control-api.env
+ExecStart=/home/ubuntu/fedfleet/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8088 --no-access-log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
