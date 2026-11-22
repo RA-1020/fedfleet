@@ -7,7 +7,7 @@ import numpy as np
 from flwr.app import Array, ArrayRecord
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fedfleet.compress import compress, decode_content, decompress  # noqa: E402
+from fedfleet.compress import compress, decode_content, decompress, update_norm  # noqa: E402
 from flwr.app import MetricRecord, RecordDict  # noqa: E402
 
 rng = np.random.default_rng(0)
@@ -99,6 +99,11 @@ def test_decode_content_like_the_aggregator():
         assert decode_content(rd, OLD) == mode
         assert "compress" not in rd and list(rd["arrays"].keys()) == list(SHAPES)
         assert err(rd["arrays"], decompress(sent, meta, OLD) if mode != "none" else NEW) == 0.0, mode
+
+
+def test_update_norm():
+    want = math.sqrt(sum(float(np.sum((NEW[k].numpy().astype(np.float64) - OLD[k].numpy()) ** 2)) for k in SHAPES))
+    assert math.isclose(update_norm(NEW, OLD), want) and update_norm(OLD, OLD) == 0.0
 
 
 if __name__ == "__main__":

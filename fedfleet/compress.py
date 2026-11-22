@@ -124,3 +124,12 @@ def decode_content(content, sent: ArrayRecord) -> str:
         content["arrays"] = decompress(content["arrays"], meta, sent)
         del content["compress"]
     return mode
+
+
+def update_norm(new: ArrayRecord, old: ArrayRecord) -> float:
+    """L2 norm of new - old over every array (the update a site sends, uncompressed)."""
+    total = 0.0
+    for key, arr in new.items():
+        d = arr.numpy().astype(np.float64) - old[key].numpy().astype(np.float64)
+        total += float(np.sum(d * d))
+    return math.sqrt(total)

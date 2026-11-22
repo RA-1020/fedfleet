@@ -13,7 +13,7 @@ import numpy as np
 from flwr.app import Array, ArrayRecord, Context, Message, MetricRecord, RecordDict
 from flwr.clientapp import ClientApp
 
-from fedfleet.compress import compress
+from fedfleet.compress import compress, update_norm
 from fedfleet.data import site_loaders
 from fedfleet.model import build_model, exchanged_module
 from fedfleet.task import evaluate, pick_device, train
@@ -67,6 +67,7 @@ def train_fn(msg: Message, context: Context) -> Message:
                  head_only, pick_device())
     model.to("cpu")
     trained = ArrayRecord(torch_state_dict=part.state_dict())
+    norm = update_norm(trained, msg.content["arrays"])
     arrays, meta, residual_present = _compress_reply(trained, msg.content["arrays"], cfg, context)
     metrics = MetricRecord({
         "train_loss": loss,
@@ -80,6 +81,9 @@ def train_fn(msg: Message, context: Context) -> Message:
         # 1 if this site carried an error-feedback residual into this round (shows that the
         # site's state survived between rounds); 0 otherwise.
         "ef_residual": residual_present,
+        # L2 norm of this site's update (trained minus received weights), before any
+        # compression or clipping: the scale a differential-privacy clipping norm is set from.
+        "update_norm": norm,
     })
     content = {"arrays": arrays, "metrics": metrics}
     if meta is not None:

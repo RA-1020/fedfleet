@@ -166,6 +166,7 @@ class CommsFedAvg(FedAvg):
                 "train_seconds": _seconds(rec.get("train_seconds")),
                 "bytes_up": None if rec.get("bytes_up") is None else int(rec["bytes_up"]),
                 "ef_residual": None if rec.get("ef_residual") is None else int(rec["ef_residual"]),
+                "update_norm": None if rec.get("update_norm") is None else round(float(rec["update_norm"]), 6),
                 "turnaround_seconds": None if sent is None else round(m.metadata.created_at - sent, 3),
             })
         rows.sort(key=lambda r: (r["site"] is None, r["site"] if r["site"] is not None else 0, r["node"]))
