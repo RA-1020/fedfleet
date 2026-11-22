@@ -11,7 +11,7 @@ from flwr.serverapp import Grid, ServerApp
 from flwr.app import MetricRecord
 from torch.utils.data import DataLoader, Subset
 
-from fedfleet.comms import CommsFedAvg
+from fedfleet.comms import DP_FRACTION, CommsFedAvg
 from fedfleet.cost import load_rates
 from fedfleet.compress import check_mode
 from fedfleet.data import public_test_set
@@ -70,13 +70,24 @@ def main(grid: Grid, context: Context) -> None:
               + (f", top-k ratio {float(cfg.get('topk-ratio', 0.1))}" if compression.startswith("topk") else "")
               + f", error feedback {'on' if bool(cfg.get('error-feedback', True)) else 'off'}")
     min_nodes = int(cfg["min-nodes"])
+    dp = None
+    if bool(cfg.get("dp", False)):
+        dp = {"noise_multiplier": float(cfg.get("dp-noise-multiplier", 1.0)),
+              "clip_norm": float(cfg.get("dp-clip-norm", 1.5)),
+              "sites": min_nodes, "delta": float(cfg.get("dp-delta", 1e-5))}
+        print(f"[FedFleet] differential privacy: noise multiplier {dp['noise_multiplier']}, "
+              f"clip norm {dp['clip_norm']}, {min_nodes} sites, equal weights, delta {dp['delta']:g}")
     strategy = CommsFedAvg(
         metrics_dir=metrics_dir,
         head_only=head_only,
         round_offset=done_rounds,
         rates=rates,
         compression=compression,
-        fraction_train=float(cfg["fraction-train"]),
+        dp=dp,
+        # With DP on, ask exactly min-nodes sites each round: the privacy accounting needs a
+        # fixed sample size, and FedAvg samples max(int(online * fraction), min_train_nodes).
+        # A fraction of exactly 0 would make FedAvg skip training, so use a tiny one.
+        fraction_train=DP_FRACTION if dp else float(cfg["fraction-train"]),
         fraction_evaluate=1.0 if bool(cfg["site-eval"]) else 0.0,
         min_train_nodes=min_nodes,
         min_evaluate_nodes=min_nodes,

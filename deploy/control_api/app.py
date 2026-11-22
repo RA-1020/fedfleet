@@ -139,6 +139,10 @@ class RunRequest(BaseModel):
     topk_ratio: float = Field(0.1, gt=0.0, le=1.0)
     error_feedback: bool = True
     seed: int = Field(-1, ge=-1, le=1_000_000)
+    dp: bool = False
+    dp_noise_multiplier: float = Field(1.0, ge=0.0, le=10.0)
+    dp_clip_norm: float = Field(1.5, gt=0.0, le=100.0)
+    dp_delta: float = Field(1e-5, gt=0.0, lt=1.0)
 
 
 def _run_config(req: RunRequest, metrics_dir: str) -> str:
@@ -152,6 +156,8 @@ def _run_config(req: RunRequest, metrics_dir: str) -> str:
         "rates-path": str(DIR / "deploy" / "rates.toml"),
         "compression": req.compression, "topk-ratio": req.topk_ratio,
         "error-feedback": req.error_feedback, "seed": req.seed,
+        "dp": req.dp, "dp-noise-multiplier": req.dp_noise_multiplier,
+        "dp-clip-norm": req.dp_clip_norm, "dp-delta": req.dp_delta,
     }
 
     def val(v):
@@ -184,4 +190,4 @@ def start_run(req: RunRequest) -> dict:
         tail = "\n".join(text.strip().splitlines()[-5:])
         raise HTTPException(502, f"flwr run failed (exit {r.returncode}): {tail}")
     return {"run_id": m.group(1), "run": f"fedfleet-runs-{req.name}", "rounds": req.rounds,
-            "min_nodes": req.min_nodes, "compression": req.compression, "watch": f"/runs/fedfleet-runs-{req.name}"}
+            "min_nodes": req.min_nodes, "compression": req.compression, "dp": req.dp, "watch": f"/runs/fedfleet-runs-{req.name}"}

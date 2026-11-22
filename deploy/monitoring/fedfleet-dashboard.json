@@ -545,6 +545,81 @@
     }
    ],
    "id": 12
+  },
+  {
+   "type": "timeseries",
+   "title": "Privacy spent (epsilon)",
+   "id": 13,
+   "description": "Epsilon at the run's delta, from Flower's RDP accountant with no sampling amplification. Empty when differential privacy is off or the noise multiplier is 0.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 36,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 2,
+     "custom": {
+      "lineInterpolation": "stepAfter"
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_dp_epsilon{run=~\"$run\"}",
+     "legendFormat": "epsilon {{run}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Sites clipped per round",
+   "id": 14,
+   "description": "Sites whose update exceeded the clipping norm and was scaled down before sending.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "fedfleet-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 36,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "min": 0,
+     "custom": {
+      "lineInterpolation": "stepAfter"
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "fedfleet-prom"
+     },
+     "expr": "fedfleet_dp_sites_clipped{run=~\"$run\"}",
+     "legendFormat": "{{run}}"
+    }
+   ]
   }
  ]
 }

@@ -22,7 +22,7 @@ from pathlib import Path
 import torch
 from flwr.app import ArrayRecord, ConfigRecord, Message, MetricRecord
 from flwr.serverapp import Grid
-from flwr.serverapp.strategy import FedAvg
+from flwr.serverapp.strategy import DifferentialPrivacyClientSideFixedClipping, FedAvg, Strategy
 from flwr.serverapp.strategy.strategy_utils import aggregate_metricrecords
 
 from fedfleet.compress import decode_content
@@ -45,11 +45,52 @@ def _seconds(value) -> float | None:
     return None if value is None else round(float(value), 3)
 
 
-class CommsFedAvg(FedAvg):
+# Weight key sent by every site. With differential privacy on, FedAvg averages by this
+# key (always 1), because Flower's privacy accountant requires equal site weights.
+DP_WEIGHT_KEY = "dp-weight"
+# fraction_train for DP runs: int(online * DP_FRACTION) is 0, so FedAvg asks min_train_nodes.
+DP_FRACTION = 1e-6
+
+
+class CommsFedAvg(Strategy):
+    """FedAvg plus FedFleet's measurements, optionally with central differential privacy.
+
+    The measuring layer wraps the aggregation strategy rather than subclassing it:
+    inner = FedAvg, or DifferentialPrivacyClientSideFixedClipping(FedAvg) when dp is set.
+    Flower's privacy accountant only accepts plain FedAvg inside its DP wrapper, and the
+    checkpoint must hold the noised model that is actually released, so the logging,
+    compression decoding and checkpointing happen out here, around the inner strategy.
+
+    dp = {"noise_multiplier", "clip_norm", "sites", "delta"} or None. Sites clip their own
+    update to clip_norm (fedfleet/client_app.py); the wrapper adds Gaussian noise of
+    standard deviation noise_multiplier * clip_norm / sites to the averaged model, and the
+    accountant (noise_multiplier > 0) tracks epsilon at the given delta. Accounting needs
+    exactly `sites` replies in every round, so a DP run tolerates no dropouts.
+    """
+
     def __init__(self, metrics_dir: str, head_only: bool, round_offset: int = 0,
-                 rates: dict | None = None, compression: str = "none", **kwargs) -> None:
+                 rates: dict | None = None, compression: str = "none", dp: dict | None = None,
+                 **kwargs) -> None:
+        super().__init__()
         kwargs.setdefault("train_metrics_aggr_fn", aggregate_train_metrics)
-        super().__init__(**kwargs)
+        if dp:
+            kwargs["weighted_by_key"] = DP_WEIGHT_KEY
+        fedavg = FedAvg(**kwargs)
+        self.dp = dp
+        self.accountant = None
+        if dp:
+            if dp["noise_multiplier"] > 0:
+                from flwr.serverapp import (NeighboringRelation, PrivacyConfig, RdpAccountant,
+                                            SamplingMethod)
+                self.accountant = RdpAccountant(PrivacyConfig(
+                    target_delta=float(dp["delta"]), population_size=int(dp["sites"]),
+                    neighboring_relation=NeighboringRelation.ADD_OR_REMOVE_ONE,
+                    sampling_method=SamplingMethod.NO_AMPLIFICATION))
+            self.inner: Strategy = DifferentialPrivacyClientSideFixedClipping(
+                fedavg, float(dp["noise_multiplier"]), float(dp["clip_norm"]), int(dp["sites"]),
+                accountant=self.accountant)
+        else:
+            self.inner = fedavg
         # Rate card for cost per round (fedfleet/cost.py); None = no cost columns.
         self.rates = rates
         self._last_ts: float | None = None   # timestamp of the previous row (round wall time)
@@ -66,10 +107,13 @@ class CommsFedAvg(FedAvg):
         self._t0 = 0.0
         self._sent: dict[int, float] = {}   # node id -> when its instruction was created
 
+    def summary(self) -> None:
+        self.inner.summary()
+
     # ---------------------------------------------------------------- training
     def configure_train(self, server_round: int, arrays: ArrayRecord,
                         config: ConfigRecord, grid: Grid) -> Iterable[Message]:
-        messages = list(super().configure_train(server_round, arrays, config, grid))
+        messages = list(self.inner.configure_train(server_round, arrays, config, grid))
         payload = arrays.count_bytes()
         self._sent_arrays = arrays
         online = len(list(grid.get_node_ids()))
@@ -112,16 +156,31 @@ class CommsFedAvg(FedAvg):
         # so FedAvg averages weights exactly as in the uncompressed case.
         for m in ok:
             decode_content(m.content, self._sent_arrays)
-        arrays, metrics = super().aggregate_train(server_round, replies)
+        arrays, metrics = self.inner.aggregate_train(server_round, replies)
         if metrics is not None:
             self._row["train_loss"] = metrics.get("train_loss")
+        if self.dp:
+            spent = self.inner.privacy_spent() if self.accountant is not None else None
+            self._row["dp"] = {
+                "noise_multiplier": float(self.dp["noise_multiplier"]),
+                "clip_norm": float(self.dp["clip_norm"]),
+                "sites": int(self.dp["sites"]),
+                "delta": float(self.dp["delta"]),
+                "epsilon": None if spent is None else float(spent.epsilon),
+                "releases": None if spent is None else int(spent.num_releases),
+                "aggregated": arrays is not None,
+            }
         if arrays is not None:
-            self._checkpoint(server_round + self.round_offset, arrays)
+            self._checkpoint(server_round + self.round_offset, arrays)   # the released (noised) model
         return arrays, metrics
 
     # ---------------------------------------------------------------- evaluation
+    def configure_evaluate(self, server_round: int, arrays: ArrayRecord,
+                           config: ConfigRecord, grid: Grid) -> Iterable[Message]:
+        return self.inner.configure_evaluate(server_round, arrays, config, grid)
+
     def aggregate_evaluate(self, server_round: int, replies: Iterable[Message]) -> MetricRecord | None:
-        metrics = super().aggregate_evaluate(server_round, replies)
+        metrics = self.inner.aggregate_evaluate(server_round, replies)
         if metrics is not None:
             self._row["eval_acc"] = metrics.get("eval_acc")
             self._row["eval_loss"] = metrics.get("eval_loss")
@@ -167,6 +226,7 @@ class CommsFedAvg(FedAvg):
                 "bytes_up": None if rec.get("bytes_up") is None else int(rec["bytes_up"]),
                 "ef_residual": None if rec.get("ef_residual") is None else int(rec["ef_residual"]),
                 "update_norm": None if rec.get("update_norm") is None else round(float(rec["update_norm"]), 6),
+                "clipped": None if rec.get("clipped") is None else int(rec["clipped"]),
                 "turnaround_seconds": None if sent is None else round(m.metadata.created_at - sent, 3),
             })
         rows.sort(key=lambda r: (r["site"] is None, r["site"] if r["site"] is not None else 0, r["node"]))
@@ -211,6 +271,10 @@ class CommsFedAvg(FedAvg):
                   f"train {s['train_seconds']} s, turnaround {s['turnaround_seconds']} s")
         for node in r.get("nodes_missing", []):
             print(f"[FedFleet]   no reply from node {node}")
+        if "dp" in r:
+            d = r["dp"]
+            eps = "not accounted (no noise)" if d["epsilon"] is None else f"epsilon {d['epsilon']:.3g} at delta {d['delta']:g}"
+            print(f"[FedFleet]   privacy: noise {d['noise_multiplier']}, clip {d['clip_norm']}, {eps}")
         if "cost" in r:
             c = r["cost"]
             print(f"[FedFleet]   cost (list, before free tiers): provider ${c['provider_usd']:.6f}, "

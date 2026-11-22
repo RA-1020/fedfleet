@@ -127,6 +127,14 @@ def render(runs: list[Run]) -> str:
         metric("fedfleet_round_seconds", "gauge", "Training exchange time of the latest round", L, row.get("train_round_seconds"))
         metric("fedfleet_global_accuracy", "gauge", "Accuracy on the public test set", L, row.get("global_acc"))
         metric("fedfleet_global_loss", "gauge", "Loss on the public test set", L, row.get("global_loss"))
+        dp = row.get("dp") or {}
+        metric("fedfleet_dp_epsilon", "gauge", "Privacy spent so far (epsilon at fedfleet_dp_delta)", L, dp.get("epsilon"))
+        metric("fedfleet_dp_delta", "gauge", "Delta at which epsilon is reported", L, dp.get("delta") if dp else None)
+        metric("fedfleet_dp_noise_multiplier", "gauge", "Gaussian noise multiplier", L, dp.get("noise_multiplier"))
+        metric("fedfleet_dp_clip_norm", "gauge", "L2 clipping bound on each site update", L, dp.get("clip_norm"))
+        clipped = [s.get("clipped") for s in row.get("sites", []) if s.get("clipped") is not None]
+        metric("fedfleet_dp_sites_clipped", "gauge", "Sites whose update was clipped in the latest round", L,
+               sum(clipped) if clipped else None)
         c = r.last_cost
         if c:
             for side in ("provider", "customer"):

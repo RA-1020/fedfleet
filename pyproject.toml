@@ -46,3 +46,7 @@ rates-path = ""             # e.g. "~/fedfleet/deploy/rates.toml" on the aggrega
 compression = "none"        # update compression sites -> aggregator: none, int8, topk, topk-int8 (fedfleet/compress.py)
 topk-ratio = 0.1            # share of each tensor's values kept in the topk modes
 error-feedback = true       # sites carry what compression dropped into their next update
+dp = false                  # central differential privacy, client-side clipping (fedfleet/comms.py)
+dp-noise-multiplier = 1.0   # Gaussian noise std = multiplier x clip norm / sites; 0 = clipping only
+dp-clip-norm = 1.5          # L2 bound on each site's update (measured norms about 1.5 after round 1)
+dp-delta = 0.00001          # delta at which epsilon is reported

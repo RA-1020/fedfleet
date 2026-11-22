@@ -13,7 +13,7 @@ import numpy as np
 from flwr.app import Array, ArrayRecord, Context, Message, MetricRecord, RecordDict
 from flwr.clientapp import ClientApp
 
-from fedfleet.compress import compress, update_norm
+from fedfleet.compress import clip_update, compress, update_norm
 from fedfleet.data import site_loaders
 from fedfleet.model import build_model, exchanged_module
 from fedfleet.task import evaluate, pick_device, train
@@ -68,6 +68,12 @@ def train_fn(msg: Message, context: Context) -> Message:
     model.to("cpu")
     trained = ArrayRecord(torch_state_dict=part.state_dict())
     norm = update_norm(trained, msg.content["arrays"])
+    clipped = False
+    if bool(cfg.get("dp", False)):
+        # Central DP with client-side clipping: bound this site's influence before sending.
+        # The DP wrapper sends its clipping norm with every instruction; prefer that value.
+        clip = msg.content["config"].get("clipping_norm", cfg["dp-clip-norm"])
+        trained, clipped = clip_update(trained, msg.content["arrays"], float(clip))
     arrays, meta, residual_present = _compress_reply(trained, msg.content["arrays"], cfg, context)
     metrics = MetricRecord({
         "train_loss": loss,
@@ -84,6 +90,9 @@ def train_fn(msg: Message, context: Context) -> Message:
         # L2 norm of this site's update (trained minus received weights), before any
         # compression or clipping: the scale a differential-privacy clipping norm is set from.
         "update_norm": norm,
+        "clipped": int(clipped),
+        # Equal weight for every site; FedAvg uses it only when DP is on (see comms.py).
+        "dp-weight": 1.0,
     })
     content = {"arrays": arrays, "metrics": metrics}
     if meta is not None:

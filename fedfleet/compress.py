@@ -133,3 +133,23 @@ def update_norm(new: ArrayRecord, old: ArrayRecord) -> float:
         d = arr.numpy().astype(np.float64) - old[key].numpy().astype(np.float64)
         total += float(np.sum(d * d))
     return math.sqrt(total)
+
+
+def clip_update(new: ArrayRecord, old: ArrayRecord, clip_norm: float) -> tuple[ArrayRecord, bool]:
+    """Scale the update new - old down to L2 norm clip_norm if it is larger.
+
+    Returns (old + clipped update, whether it was clipped). Used by the sites for central
+    differential privacy, before any compression, so the norm bound holds for what is sent.
+    """
+    if clip_norm <= 0:
+        raise ValueError("clip_norm must be positive")
+    norm = update_norm(new, old)
+    if norm <= clip_norm:
+        return new, False
+    scale = clip_norm / norm
+    out = {}
+    for key, arr in new.items():
+        base = old[key].numpy()
+        delta = arr.numpy().astype(np.float64) - base.astype(np.float64)
+        out[key] = Array((base.astype(np.float64) + delta * scale).astype(arr.numpy().dtype))
+    return ArrayRecord(out), True
