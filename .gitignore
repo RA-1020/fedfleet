@@ -12,3 +12,6 @@ certificates/
 .DS_Store
 logs/
 keys/
+
+# Wrangler local cache
+.wrangler/

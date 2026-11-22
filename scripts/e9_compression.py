@@ -23,7 +23,7 @@ from pathlib import Path
 def call(gw: str, token: str, method: str, path: str, body: dict | None = None) -> dict:
     req = urllib.request.Request(gw.rstrip("/") + path, method=method,
                                  data=None if body is None else json.dumps(body).encode(),
-                                 headers={"Authorization": f"Bearer {token}", "content-type": "application/json"})
+                                 headers={"User-Agent": "fedfleet-e9/1.0", "Authorization": f"Bearer {token}", "content-type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=150) as r:
             return json.loads(r.read())
