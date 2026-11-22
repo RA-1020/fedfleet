@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-FILES = ("latest_checkpoint.pt", "rounds.jsonl", "final_exchanged.pt")
+FILES = ("latest_checkpoint.pt", "rounds.jsonl", "final_exchanged.pt", "model.onnx", "model_card.md")
 PATTERNS = ["~/fedfleet-runs*/{f}", "~/fedfleet-runs*/*/{f}"]
 API_VERSION = "2021-12-02"
 
