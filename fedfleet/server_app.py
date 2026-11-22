@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader, Subset
 
 from fedfleet.comms import CommsFedAvg
 from fedfleet.cost import load_rates
+from fedfleet.compress import check_mode
 from fedfleet.data import public_test_set
 from fedfleet.model import build_model, count_params, exchanged_module
 from fedfleet.task import evaluate, pick_device
@@ -62,12 +63,19 @@ def main(grid: Grid, context: Context) -> None:
         else:
             print(f"[FedFleet] rate card {rates_path} not found; cost per round is off")
 
+    compression = str(cfg.get("compression", "none"))
+    check_mode(compression, float(cfg.get("topk-ratio", 0.1)))
+    if compression != "none":
+        print(f"[FedFleet] update compression: {compression}"
+              + (f", top-k ratio {float(cfg.get('topk-ratio', 0.1))}" if compression.startswith("topk") else "")
+              + f", error feedback {'on' if bool(cfg.get('error-feedback', True)) else 'off'}")
     min_nodes = int(cfg["min-nodes"])
     strategy = CommsFedAvg(
         metrics_dir=metrics_dir,
         head_only=head_only,
         round_offset=done_rounds,
         rates=rates,
+        compression=compression,
         fraction_train=float(cfg["fraction-train"]),
         fraction_evaluate=1.0 if bool(cfg["site-eval"]) else 0.0,
         min_train_nodes=min_nodes,

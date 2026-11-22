@@ -64,6 +64,16 @@ def test_unknown_site_uses_default():
     assert round_cost(row, RATES)["customer_usd"] == 0.0
 
 
+def test_site_upload_size_used_for_egress():
+    """With compression a site sends fewer bytes than the update size; egress follows the site's bytes."""
+    row = {"round": 1, "bytes_per_update": 28248, "bytes_down": 3 * 28248, "train_round_seconds": 10.0,
+           "sites": [dict(site(2, 1.0, 1.0), bytes_up=3217)]}
+    old = {"round": 1, "bytes_per_update": 28248, "bytes_down": 3 * 28248, "train_round_seconds": 10.0,
+           "sites": [site(2, 1.0, 1.0)]}
+    egress = lambda r: round_cost(r, RATES)["customer_egress_usd"]
+    assert egress(old) > 0 and math.isclose(egress(row), egress(old) * 3217 / 28248)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

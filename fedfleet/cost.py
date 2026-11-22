@@ -65,7 +65,10 @@ def round_cost(row: dict, rates: dict, wall_seconds: float | None = None,
         compute = wall * r.get("usd_per_hour", 0.0) / 3600
         busy_s = (s.get("setup_seconds") or 0.0) + (s.get("train_seconds") or 0.0)
         busy = busy_s * r.get("usd_per_hour", 0.0) / 3600
-        up = row.get("bytes_per_update", 0) * r.get("egress_usd_per_gb", 0.0) / GB
+        # The site's own upload size (smaller with compression); older rows only have the
+        # update size, which equals the upload when nothing is compressed.
+        sent = s.get("bytes_up") if s.get("bytes_up") is not None else row.get("bytes_per_update", 0)
+        up = sent * r.get("egress_usd_per_gb", 0.0) / GB
         customer_compute += compute
         customer_egress += up
         busy_total += busy

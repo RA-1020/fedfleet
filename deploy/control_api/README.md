@@ -11,7 +11,7 @@ opened on the VM.
 | GET | `/status` | state of the aggregator, exporter, backup, Prometheus and Grafana; latest run and round |
 | GET | `/runs` | every run: rounds, final accuracy, resumes, dropouts, bytes, cost (list prices) |
 | GET | `/runs/{name}` | one run with per-round detail |
-| POST | `/runs` | start a run: `{"name", "rounds" 1-20, "min_nodes" 1-3, "round_timeout" 30-900, "head_only"}` |
+| POST | `/runs` | start a run: `{"name", "rounds" 1-20, "min_nodes" 1-3, "round_timeout" 30-900, "head_only", "compression" none/int8/topk/topk-int8, "topk_ratio" (0,1], "error_feedback", "seed" -1 or 0-1000000}` |
 
 `POST /runs` calls `flwr run ~/fedfleet fedfleet-vm` on the VM with fixed data, backbone and
 rate-card paths; only the fields above can be set. Metrics go to `~/fedfleet-runs-<name>`, so

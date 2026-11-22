@@ -25,6 +25,7 @@ from flwr.serverapp import Grid
 from flwr.serverapp.strategy import FedAvg
 from flwr.serverapp.strategy.strategy_utils import aggregate_metricrecords
 
+from fedfleet.compress import decode_content
 from fedfleet.cost import round_cost
 
 # Metrics that describe one site and mean nothing when averaged across sites.
@@ -46,7 +47,7 @@ def _seconds(value) -> float | None:
 
 class CommsFedAvg(FedAvg):
     def __init__(self, metrics_dir: str, head_only: bool, round_offset: int = 0,
-                 rates: dict | None = None, **kwargs) -> None:
+                 rates: dict | None = None, compression: str = "none", **kwargs) -> None:
         kwargs.setdefault("train_metrics_aggr_fn", aggregate_train_metrics)
         super().__init__(**kwargs)
         # Rate card for cost per round (fedfleet/cost.py); None = no cost columns.
@@ -59,6 +60,8 @@ class CommsFedAvg(FedAvg):
         self.dir.mkdir(parents=True, exist_ok=True)
         self.metrics_file = self.dir / "rounds.jsonl"
         self.head_only = head_only
+        self.compression = compression
+        self._sent_arrays: ArrayRecord | None = None   # what this round sent (to decode updates)
         self._row: dict = {}
         self._t0 = 0.0
         self._sent: dict[int, float] = {}   # node id -> when its instruction was created
@@ -68,6 +71,7 @@ class CommsFedAvg(FedAvg):
                         config: ConfigRecord, grid: Grid) -> Iterable[Message]:
         messages = list(super().configure_train(server_round, arrays, config, grid))
         payload = arrays.count_bytes()
+        self._sent_arrays = arrays
         online = len(list(grid.get_node_ids()))
         self.max_seen = max(getattr(self, "max_seen", 0), online)
         self._sent = {m.metadata.dst_node_id: m.metadata.created_at for m in messages}
@@ -75,6 +79,7 @@ class CommsFedAvg(FedAvg):
         self._row = {
             "round": server_round + self.round_offset,
             "mode": "head-only" if self.head_only else "full-model",
+            "compression": self.compression,
             "nodes_online": online,
             "nodes_registered": self.max_seen,
             "nodes_asked": len(messages),
@@ -89,7 +94,7 @@ class CommsFedAvg(FedAvg):
         self._row.update({
             "nodes_replied": len(ok),
             "nodes_dropped": self._row.get("nodes_asked", 0) - len(ok),
-            "bytes_up": sum(m.content["arrays"].count_bytes() for m in ok),
+            "bytes_up": sum(m.content["arrays"].count_bytes() for m in ok),   # as sent (compressed)
             "train_round_seconds": round(time.perf_counter() - self._t0, 3),
             "sites": self._site_rows(ok),
             "nodes_missing": sorted(set(self._sent) - {m.metadata.src_node_id for m in ok}),
@@ -103,6 +108,10 @@ class CommsFedAvg(FedAvg):
                   for m in replies if m.has_error()]
         if errors:
             self._row["errors"] = errors
+        # Compressed updates are decoded into full weights here, after their size was counted,
+        # so FedAvg averages weights exactly as in the uncompressed case.
+        for m in ok:
+            decode_content(m.content, self._sent_arrays)
         arrays, metrics = super().aggregate_train(server_round, replies)
         if metrics is not None:
             self._row["train_loss"] = metrics.get("train_loss")
@@ -155,6 +164,8 @@ class CommsFedAvg(FedAvg):
                 "train_loss": rec.get("train_loss"),
                 "setup_seconds": _seconds(rec.get("setup_seconds")),
                 "train_seconds": _seconds(rec.get("train_seconds")),
+                "bytes_up": None if rec.get("bytes_up") is None else int(rec["bytes_up"]),
+                "ef_residual": None if rec.get("ef_residual") is None else int(rec["ef_residual"]),
                 "turnaround_seconds": None if sent is None else round(m.metadata.created_at - sent, 3),
             })
         rows.sort(key=lambda r: (r["site"] is None, r["site"] if r["site"] is not None else 0, r["node"]))
@@ -187,7 +198,8 @@ class CommsFedAvg(FedAvg):
         print(
             f"[FedFleet] round {r['round']}: {r.get('nodes_online')}/{r.get('nodes_registered')} sites online, "
             f"{r.get('nodes_replied')}/{r.get('nodes_asked')} replied, "
-            f"{r['bytes_per_update']:,} B per update, {r.get('bytes_up', 0):,} B up, "
+            f"{r['bytes_per_update']:,} B per update, {r.get('bytes_up', 0):,} B up "
+            f"({r.get('compression', 'none')}), "
             f"{r.get('train_round_seconds')} s, global_acc={fmt(r.get('global_acc'))}, "
             f"site_acc={fmt(r.get('eval_acc'))}"
         )

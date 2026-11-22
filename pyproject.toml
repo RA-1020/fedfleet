@@ -43,3 +43,6 @@ backbone-path = ""          # e.g. "~/fedfleet/backbone.pt"; empty = seeded rand
 metrics-dir = "~/fedfleet-runs"  # per-round JSONL metrics and checkpoints
 resume = false              # resume from <metrics-dir>/latest_checkpoint.pt
 rates-path = ""             # e.g. "~/fedfleet/deploy/rates.toml" on the aggregator; empty = no cost per round
+compression = "none"        # update compression sites -> aggregator: none, int8, topk, topk-int8 (fedfleet/compress.py)
+topk-ratio = 0.1            # share of each tensor's values kept in the topk modes
+error-feedback = true       # sites carry what compression dropped into their next update

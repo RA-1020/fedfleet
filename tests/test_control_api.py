@@ -53,7 +53,8 @@ def test_status():
 
 def test_start_run_validation_and_command():
     for bad in ({"name": "Bad Name"}, {"name": "ok", "rounds": 50}, {"name": "ok", "min_nodes": 9},
-                {"name": "ok", "round_timeout": 5}):
+                {"name": "ok", "round_timeout": 5}, {"name": "ok", "compression": "zip"},
+                {"name": "ok", "topk_ratio": 0}):
         assert c.post("/runs", json=bad, headers=KEY).status_code == 422, bad
     assert c.post("/runs", json={"name": "crash"}, headers=KEY).status_code == 409   # folder exists
     seen = {}
@@ -64,13 +65,15 @@ def test_start_run_validation_and_command():
     orig = api.subprocess.run
     api.subprocess.run = fake_run
     try:
-        r = c.post("/runs", json={"name": "demo-1", "rounds": 2, "min_nodes": 3}, headers=KEY)
+        r = c.post("/runs", json={"name": "demo-1", "rounds": 2, "min_nodes": 3, "compression": "topk-int8",
+                                  "topk_ratio": 0.05}, headers=KEY)
         assert r.status_code == 202 and r.json()["run_id"] == "123456", r.text
         cmd = seen["cmd"]
         assert cmd[1:4] == ["run", str(ROOT), "fedfleet-vm"] and cmd[4] == "--run-config"
         cfg = cmd[5]
         for part in ("num-server-rounds=2", "min-nodes=3", 'metrics-dir="~/fedfleet-runs-demo-1"',
-                     "head-only=true", "site-eval=false", "rates-path="):
+                     "head-only=true", "site-eval=false", "rates-path=", 'compression="topk-int8"',
+                     "topk-ratio=0.05", "error-feedback=true", "seed=-1"):
             assert part in cfg, (part, cfg)
         api.subprocess.run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "Connection unavailable")
         r = c.post("/runs", json={"name": "demo-2"}, headers=KEY)

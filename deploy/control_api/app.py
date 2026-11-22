@@ -29,6 +29,8 @@ import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 HOME = Path.home()
@@ -133,6 +135,10 @@ class RunRequest(BaseModel):
     min_nodes: int = Field(3, ge=1, le=3)
     round_timeout: float = Field(600.0, ge=30.0, le=900.0)
     head_only: bool = True
+    compression: Literal["none", "int8", "topk", "topk-int8"] = "none"
+    topk_ratio: float = Field(0.1, gt=0.0, le=1.0)
+    error_feedback: bool = True
+    seed: int = Field(-1, ge=-1, le=1_000_000)
 
 
 def _run_config(req: RunRequest, metrics_dir: str) -> str:
@@ -144,6 +150,8 @@ def _run_config(req: RunRequest, metrics_dir: str) -> str:
         "backbone-path": "~/fedfleet/backbone.pt",
         "metrics-dir": metrics_dir,
         "rates-path": str(DIR / "deploy" / "rates.toml"),
+        "compression": req.compression, "topk-ratio": req.topk_ratio,
+        "error-feedback": req.error_feedback, "seed": req.seed,
     }
 
     def val(v):
@@ -176,4 +184,4 @@ def start_run(req: RunRequest) -> dict:
         tail = "\n".join(text.strip().splitlines()[-5:])
         raise HTTPException(502, f"flwr run failed (exit {r.returncode}): {tail}")
     return {"run_id": m.group(1), "run": f"fedfleet-runs-{req.name}", "rounds": req.rounds,
-            "min_nodes": req.min_nodes, "watch": f"/runs/fedfleet-runs-{req.name}"}
+            "min_nodes": req.min_nodes, "compression": req.compression, "watch": f"/runs/fedfleet-runs-{req.name}"}
