@@ -27,9 +27,9 @@ egress_usd_per_gb = 0.0
 
 [sites.2]
 name = "azure-b2s-indiasouthcentral"
-# B2s Linux pay-as-you-go: $0.0448 per hour in Central India (azurespeed.com and azurehub.org,
-# read 20 Nov 2026). No published figure found for India South Central; Central India is used
-# as a stand-in. Check the real meter in Cost analysis before quoting.
+# B2s Linux pay-as-you-go: $0.0448 per hour in Central India, from Azure's own Retail Prices API
+# (prices.azure.com, "Virtual Machines BS Series", meter "B2s", read 22 Nov 2026). The API lists
+# no B2s price for India South Central, so the Central India price is used as a stand-in.
 usd_per_hour = 0.0448
 # Azure internet egress from Asia: first 100 GB a month free, then $0.12 per GB
 # (azure.microsoft.com/pricing/details/data-transfers, read 20 Nov 2026). Marginal list rate.
