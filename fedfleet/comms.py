@@ -70,7 +70,7 @@ class CommsFedAvg(Strategy):
 
     def __init__(self, metrics_dir: str, head_only: bool, round_offset: int = 0,
                  rates: dict | None = None, compression: str = "none", dp: dict | None = None,
-                 **kwargs) -> None:
+                 dp_state: dict | None = None, **kwargs) -> None:
         super().__init__()
         kwargs.setdefault("train_metrics_aggr_fn", aggregate_train_metrics)
         if dp:
@@ -86,6 +86,13 @@ class CommsFedAvg(Strategy):
                     target_delta=float(dp["delta"]), population_size=int(dp["sites"]),
                     neighboring_relation=NeighboringRelation.ADD_OR_REMOVE_ONE,
                     sampling_method=SamplingMethod.NO_AMPLIFICATION))
+                if dp_state is not None:
+                    # Resumed run: continue the privacy ledger of the rounds already released.
+                    # Raises ValueError if delta or the number of sites changed since then.
+                    self.accountant.load_state_dict(dp_state)
+            elif dp_state is not None:
+                raise ValueError("this run's earlier rounds were accounted with noise; "
+                                 "resuming it with noise multiplier 0 would release unaccounted models")
             self.inner: Strategy = DifferentialPrivacyClientSideFixedClipping(
                 fedavg, float(dp["noise_multiplier"]), float(dp["clip_norm"]), int(dp["sites"]),
                 accountant=self.accountant)
@@ -232,9 +239,15 @@ class CommsFedAvg(Strategy):
         rows.sort(key=lambda r: (r["site"] is None, r["site"] if r["site"] is not None else 0, r["node"]))
         return rows
 
+    def dp_state_json(self) -> str | None:
+        return None if self.accountant is None else json.dumps(self.accountant.state_dict())
+
     def _checkpoint(self, server_round: int, arrays: ArrayRecord) -> None:
         state = {"round": server_round, "head_only": self.head_only,
-                 "state_dict": arrays.to_torch_state_dict()}
+                 "state_dict": arrays.to_torch_state_dict(),
+                 # The privacy ledger travels with the model it describes, so a resumed DP run
+                 # keeps counting epsilon instead of restarting from zero (JSON text: plain data).
+                 "dp_accountant": self.dp_state_json()}
         # Write to a temporary file, then rename: a crash in the middle of saving can
         # never leave a half-written latest_checkpoint.pt behind.
         tmp = self.dir / "latest_checkpoint.pt.tmp"

@@ -59,14 +59,17 @@ class FakeGrid:
         return out
 
 
-def run(dp=None, clip=None, rounds=2, sites=3):
+def run(dp=None, clip=None, rounds=2, sites=3, dp_state=None, offset=0, keep=None):
     d = Path(tempfile.mkdtemp())
     # fraction_train as server_app.py sets it: tiny with DP on, so exactly `sites` are asked
-    s = CommsFedAvg(metrics_dir=str(d), head_only=True, dp=dp, fraction_evaluate=0.0,
+    s = CommsFedAvg(metrics_dir=str(d), head_only=True, dp=dp, dp_state=dp_state, round_offset=offset,
+                    fraction_evaluate=0.0,
                     fraction_train=DP_FRACTION if dp else 1.0,
                     min_train_nodes=sites, min_evaluate_nodes=sites, min_available_nodes=sites)
     saved = []
     s._checkpoint = lambda rnd, arrays: saved.append(arrays)
+    if keep is not None:
+        keep.append(s)
     res = s.start(grid=FakeGrid(clip), initial_arrays=START, num_rounds=rounds, timeout=5,
                   evaluate_fn=lambda r, a: (s.log_global(r, 0.5, 1.0), MetricRecord({"acc": 0.5}))[1])
     rows = [json.loads(l) for l in (d / "rounds.jsonl").read_text().splitlines()]
@@ -117,6 +120,29 @@ def test_dp_asks_exactly_min_nodes_when_more_are_online():
     _, rows, _ = run(dp=dp, clip=1.0, rounds=2, sites=2)        # three sites online
     assert [r["nodes_asked"] for r in rows if r.get("round", 0) >= 1] == [2, 2]
     assert rows[-1]["dp"]["releases"] == 2
+
+
+def test_dp_ledger_continues_after_resume():
+    dp = {"noise_multiplier": 1.0, "clip_norm": 1.0, "sites": 3, "delta": 1e-5}
+    _, straight, _ = run(dp=dp, clip=1.0, rounds=3)
+    first = []
+    run(dp=dp, clip=1.0, rounds=2, keep=first)
+    ledger = json.loads(first[0].dp_state_json())             # what the checkpoint stores
+    _, resumed, _ = run(dp=dp, clip=1.0, rounds=1, dp_state=ledger, offset=2)
+    last = [r for r in resumed if r.get("round", 0) >= 1][-1]
+    assert last["round"] == 3 and last["dp"]["releases"] == 3
+    assert math.isclose(last["dp"]["epsilon"], straight[-1]["dp"]["epsilon"], rel_tol=1e-9)
+    for bad in ({**dp, "delta": 1e-6}, {**dp, "sites": 2}):
+        try:
+            run(dp=bad, clip=1.0, rounds=1, dp_state=ledger, offset=2, sites=bad["sites"])
+            raise AssertionError("changed privacy settings were accepted")
+        except ValueError:
+            pass
+    try:
+        run(dp={**dp, "noise_multiplier": 0.0}, clip=1.0, rounds=1, dp_state=ledger, offset=2)
+        raise AssertionError("noise 0 on a noisy ledger was accepted")
+    except ValueError:
+        pass
 
 
 if __name__ == "__main__":

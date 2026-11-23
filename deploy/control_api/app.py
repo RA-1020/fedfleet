@@ -149,20 +149,21 @@ class RunRequest(BaseModel):
                                              "rounds is then the total to reach, not the number to add")
 
 
-def _done_rounds(path: Path) -> int:
-    """Highest training round logged in a rounds.jsonl (0 if none); the checkpoint matches it."""
-    done = 0
+def _done_rounds(path: Path) -> tuple[int, dict | None]:
+    """Highest round logged in a rounds.jsonl (0 if none; the checkpoint matches it) and the
+    privacy settings of that round's row (None for a run without DP)."""
+    done, dp = 0, None
     try:
         for line in path.read_text().splitlines():
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(row.get("round"), int):
-                done = max(done, row["round"])
+            if isinstance(row.get("round"), int) and row["round"] >= done:
+                done, dp = row["round"], row.get("dp")
     except FileNotFoundError:
         pass
-    return done
+    return done, dp
 
 
 def _run_config(req: RunRequest, metrics_dir: str) -> str:
@@ -197,13 +198,20 @@ def start_run(req: RunRequest) -> dict:
     metrics_dir = HOME / f"fedfleet-runs-{req.name}"
     done = None
     if req.resume:
-        if req.dp:
-            # The privacy accountant's state is not in the checkpoint: a resumed DP run would
-            # restart epsilon from zero and under-report the privacy spent.
-            raise HTTPException(422, "resume is not supported with dp (epsilon would restart from zero)")
         if not (metrics_dir / "latest_checkpoint.pt").is_file():
             raise HTTPException(409, f"resume needs fedfleet-runs-{req.name}/latest_checkpoint.pt on the aggregator")
-        done = _done_rounds(metrics_dir / "rounds.jsonl")
+        done, last_dp = _done_rounds(metrics_dir / "rounds.jsonl")
+        # Epsilon covers every released model only if a DP run resumes with the same privacy
+        # settings (the aggregator checks the saved ledger too; this refuses early and says why).
+        was_noisy = bool(last_dp) and (last_dp.get("noise_multiplier") or 0) > 0
+        now_noisy = req.dp and req.dp_noise_multiplier > 0
+        if was_noisy != now_noisy:
+            raise HTTPException(409, "resume with the same privacy settings as the original run: "
+                                     + ("it ran with DP noise" if was_noisy else "it ran without DP noise"))
+        if was_noisy and (abs(float(last_dp.get("noise_multiplier", 0)) - req.dp_noise_multiplier) > 1e-12
+                          or abs(float(last_dp.get("delta", 0)) - req.dp_delta) > 1e-15):
+            raise HTTPException(409, "resume a DP run with its original noise multiplier and delta "
+                                     f"({last_dp.get('noise_multiplier')}, {last_dp.get('delta')})")
         if done >= req.rounds:
             raise HTTPException(409, f"fedfleet-runs-{req.name} already has {done} rounds; ask for more than that")
     elif metrics_dir.exists():

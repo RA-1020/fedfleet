@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import torch
@@ -34,6 +35,7 @@ def main(grid: Grid, context: Context) -> None:
 
     ckpt = Path(metrics_dir) / "latest_checkpoint.pt"
     done_rounds = 0
+    saved_dp: str | None = None   # privacy ledger saved with the checkpoint (DP runs with noise)
     if bool(cfg["resume"]):
         if not ckpt.exists():
             print(f"[FedFleet] resume requested but {ckpt} not found; starting from round 1")
@@ -42,6 +44,7 @@ def main(grid: Grid, context: Context) -> None:
             if saved["head_only"] == head_only:
                 state = saved["state_dict"]
                 done_rounds = int(saved["round"])
+                saved_dp = saved.get("dp_accountant")
                 print(f"[FedFleet] resuming from checkpoint of round {done_rounds}")
             else:
                 print("[FedFleet] checkpoint was saved in the other mode (head-only or full "
@@ -77,6 +80,19 @@ def main(grid: Grid, context: Context) -> None:
               "sites": min_nodes, "delta": float(cfg.get("dp-delta", 1e-5))}
         print(f"[FedFleet] differential privacy: noise multiplier {dp['noise_multiplier']}, "
               f"clip norm {dp['clip_norm']}, {min_nodes} sites, equal weights, delta {dp['delta']:g}")
+    # A resumed run keeps its privacy settings: epsilon covers every released model only if the
+    # ledger continues. Refuse the combinations that would silently break that.
+    noisy = dp is not None and dp["noise_multiplier"] > 0
+    if done_rounds and noisy and saved_dp is None:
+        print("[FedFleet] this checkpoint has no privacy ledger (saved without DP noise); "
+              "resuming it with DP would report epsilon for the new rounds only. Not resuming.")
+        return
+    if done_rounds and saved_dp is not None and not noisy:
+        print("[FedFleet] this checkpoint comes from a DP run with noise; resume it with the same "
+              "dp settings (dp=true, same noise multiplier, delta and sites). Not resuming.")
+        return
+    if done_rounds and saved_dp is not None:
+        print("[FedFleet] continuing the privacy ledger of the earlier rounds")
     strategy = CommsFedAvg(
         metrics_dir=metrics_dir,
         head_only=head_only,
@@ -84,6 +100,7 @@ def main(grid: Grid, context: Context) -> None:
         rates=rates,
         compression=compression,
         dp=dp,
+        dp_state=json.loads(saved_dp) if (saved_dp and noisy) else None,
         # With DP on, ask exactly min-nodes sites each round: the privacy accounting needs a
         # fixed sample size, and FedAvg samples max(int(online * fraction), min_train_nodes).
         # A fraction of exactly 0 would make FedAvg skip training, so use a tiny one.

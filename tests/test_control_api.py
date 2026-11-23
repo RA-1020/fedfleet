@@ -100,7 +100,16 @@ def test_resume_rules_and_command():
     (restored / "rounds.jsonl").write_text("".join(json.dumps({"round": r, "global_acc": 0.5}) + "\n" for r in range(6)))
     assert c.post("/runs", json={"name": "restored", "rounds": 5, "resume": True}, headers=KEY).status_code == 409
     r = c.post("/runs", json={"name": "restored", "rounds": 8, "resume": True, "dp": True}, headers=KEY)
-    assert r.status_code == 422 and "epsilon" in r.json()["detail"]
+    assert r.status_code == 409 and "without DP noise" in r.json()["detail"]
+    noisy = HOME / "fedfleet-runs-noisy"
+    noisy.mkdir()
+    (noisy / "latest_checkpoint.pt").write_bytes(b"x")
+    dp = {"noise_multiplier": 0.2, "clip_norm": 1.5, "sites": 3, "delta": 1e-5, "epsilon": 57.3}
+    (noisy / "rounds.jsonl").write_text("".join(json.dumps({"round": r, "dp": dp}) + "\n" for r in (1, 2)))
+    for body, word in (({}, "with DP noise"), ({"dp": True, "dp_noise_multiplier": 1.0}, "original noise"),
+                       ({"dp": True, "dp_noise_multiplier": 0.2, "dp_delta": 1e-6}, "original noise")):
+        r = c.post("/runs", json={"name": "noisy", "rounds": 5, "resume": True, **body}, headers=KEY)
+        assert r.status_code == 409 and word in r.json()["detail"], (body, r.text)
     seen = {}
 
     def fake_run(cmd, **kw):
@@ -112,6 +121,9 @@ def test_resume_rules_and_command():
         r = c.post("/runs", json={"name": "restored", "rounds": 8, "resume": True}, headers=KEY)
         assert r.status_code == 202 and r.json()["rounds_done_before"] == 5, r.text
         assert "resume=true" in seen["cmd"][5] and "num-server-rounds=8" in seen["cmd"][5]
+        r = c.post("/runs", json={"name": "noisy", "rounds": 5, "resume": True, "dp": True,
+                                  "dp_noise_multiplier": 0.2}, headers=KEY)
+        assert r.status_code == 202 and r.json()["rounds_done_before"] == 2, r.text
         r = c.post("/runs", json={"name": "fresh-one"}, headers=KEY)
         assert r.status_code == 202 and "resume=false" in seen["cmd"][5]
     finally:
