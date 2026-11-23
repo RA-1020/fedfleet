@@ -9,7 +9,9 @@ neither the tunnel nor anyone on the VM's network can call this API without that
     GET  /status             aggregator, monitoring and backup services; the latest run
     GET  /runs               every run: rounds, accuracy, resumes, dropouts, cost
     GET  /runs/{name}        one run, with per-round detail
-    POST /runs               start a federation run with allow-listed settings
+    POST /runs               start a federation run with allow-listed settings, or resume one
+                             ("resume": true: continue an existing folder from its checkpoint,
+                             e.g. one restored from the Blob backup by scripts/restore_run.sh)
 
 Settings come from the environment (systemd EnvironmentFile, mode 600):
     FEDFLEET_ORIGIN_KEY   required; the gateway sends it as X-FedFleet-Origin-Key
@@ -143,6 +145,24 @@ class RunRequest(BaseModel):
     dp_noise_multiplier: float = Field(1.0, ge=0.0, le=10.0)
     dp_clip_norm: float = Field(1.5, gt=0.0, le=100.0)
     dp_delta: float = Field(1e-5, gt=0.0, lt=1.0)
+    resume: bool = Field(False, description="continue fedfleet-runs-<name> from its latest_checkpoint.pt; "
+                                             "rounds is then the total to reach, not the number to add")
+
+
+def _done_rounds(path: Path) -> int:
+    """Highest training round logged in a rounds.jsonl (0 if none); the checkpoint matches it."""
+    done = 0
+    try:
+        for line in path.read_text().splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row.get("round"), int):
+                done = max(done, row["round"])
+    except FileNotFoundError:
+        pass
+    return done
 
 
 def _run_config(req: RunRequest, metrics_dir: str) -> str:
@@ -158,6 +178,7 @@ def _run_config(req: RunRequest, metrics_dir: str) -> str:
         "error-feedback": req.error_feedback, "seed": req.seed,
         "dp": req.dp, "dp-noise-multiplier": req.dp_noise_multiplier,
         "dp-clip-norm": req.dp_clip_norm, "dp-delta": req.dp_delta,
+        "resume": req.resume,
     }
 
     def val(v):
@@ -174,7 +195,18 @@ def start_run(req: RunRequest) -> dict:
     if not RUN_NAME.match(req.name):
         raise HTTPException(422, "name must be 1-40 lower-case letters, digits or hyphens")
     metrics_dir = HOME / f"fedfleet-runs-{req.name}"
-    if metrics_dir.exists():
+    done = None
+    if req.resume:
+        if req.dp:
+            # The privacy accountant's state is not in the checkpoint: a resumed DP run would
+            # restart epsilon from zero and under-report the privacy spent.
+            raise HTTPException(422, "resume is not supported with dp (epsilon would restart from zero)")
+        if not (metrics_dir / "latest_checkpoint.pt").is_file():
+            raise HTTPException(409, f"resume needs fedfleet-runs-{req.name}/latest_checkpoint.pt on the aggregator")
+        done = _done_rounds(metrics_dir / "rounds.jsonl")
+        if done >= req.rounds:
+            raise HTTPException(409, f"fedfleet-runs-{req.name} already has {done} rounds; ask for more than that")
+    elif metrics_dir.exists():
         raise HTTPException(409, f"run folder fedfleet-runs-{req.name} already exists; pick a new name")
     cmd = [str(DIR / ".venv" / "bin" / "flwr"), "run", str(DIR), CONNECTION,
            "--run-config", _run_config(req, f"~/fedfleet-runs-{req.name}")]
@@ -190,4 +222,5 @@ def start_run(req: RunRequest) -> dict:
         tail = "\n".join(text.strip().splitlines()[-5:])
         raise HTTPException(502, f"flwr run failed (exit {r.returncode}): {tail}")
     return {"run_id": m.group(1), "run": f"fedfleet-runs-{req.name}", "rounds": req.rounds,
-            "min_nodes": req.min_nodes, "compression": req.compression, "dp": req.dp, "watch": f"/runs/fedfleet-runs-{req.name}"}
+            "min_nodes": req.min_nodes, "compression": req.compression, "dp": req.dp,
+            "resume": req.resume, "rounds_done_before": done, "watch": f"/runs/fedfleet-runs-{req.name}"}

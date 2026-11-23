@@ -82,16 +82,44 @@ def test_start_run_validation_and_command():
         api.subprocess.run = orig
 
 
-if __name__ == "__main__":
-    for name, fn in list(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print("ok", name)
-
-
 def test_run_config_carries_dp_settings():
     cfg = api._run_config(api.RunRequest(name="dp-z05", dp=True, dp_noise_multiplier=0.05), "/tmp/m")
     assert "dp=true" in cfg and "dp-noise-multiplier=0.05" in cfg
     assert "dp-clip-norm=1.5" in cfg and "dp-delta=1e-05" in cfg
     off = api._run_config(api.RunRequest(name="plain"), "/tmp/m")
     assert "dp=false" in off
+
+
+def test_resume_rules_and_command():
+    # no folder / no checkpoint
+    assert c.post("/runs", json={"name": "nothing-here", "rounds": 8, "resume": True}, headers=KEY).status_code == 409
+    assert c.post("/runs", json={"name": "crash", "rounds": 9, "resume": True}, headers=KEY).status_code == 409
+    restored = HOME / "fedfleet-runs-restored"
+    restored.mkdir()
+    (restored / "latest_checkpoint.pt").write_bytes(b"x")
+    (restored / "rounds.jsonl").write_text("".join(json.dumps({"round": r, "global_acc": 0.5}) + "\n" for r in range(6)))
+    assert c.post("/runs", json={"name": "restored", "rounds": 5, "resume": True}, headers=KEY).status_code == 409
+    r = c.post("/runs", json={"name": "restored", "rounds": 8, "resume": True, "dp": True}, headers=KEY)
+    assert r.status_code == 422 and "epsilon" in r.json()["detail"]
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, "Successfully started run 42\n", "")
+    orig = api.subprocess.run
+    api.subprocess.run = fake_run
+    try:
+        r = c.post("/runs", json={"name": "restored", "rounds": 8, "resume": True}, headers=KEY)
+        assert r.status_code == 202 and r.json()["rounds_done_before"] == 5, r.text
+        assert "resume=true" in seen["cmd"][5] and "num-server-rounds=8" in seen["cmd"][5]
+        r = c.post("/runs", json={"name": "fresh-one"}, headers=KEY)
+        assert r.status_code == 202 and "resume=false" in seen["cmd"][5]
+    finally:
+        api.subprocess.run = orig
+
+
+if __name__ == "__main__":
+    for name, fn in list(globals().items()):
+        if name.startswith("test_"):
+            fn()
+            print("ok", name)
