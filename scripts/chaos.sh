@@ -4,19 +4,21 @@
 #   scripts/chaos.sh kill <name> [--rounds 6] [--after 3] [--dp-noise Z] --yes
 #       Starts a run, waits until round <after> is logged, waits 5 s more so the kill lands
 #       inside the next round, then SIGKILLs the aggregator (fedfleet-superlink). systemd
-#       restarts it (Restart=always, 5 s); the sites reconnect by themselves. The drill then
-#       resumes the run from its checkpoint through the control API and waits for the last
-#       round. With --dp-noise the run uses differential privacy and the privacy ledger must
+#       restarts it (Restart=always, 5 s); the sites reconnect by themselves. As soon as the
+#       aggregator lists all 3 sites online again, the drill resumes the run from its checkpoint
+#       through the control API and waits for the last round. With --dp-noise the run uses differential privacy and the privacy ledger must
 #       continue across the crash. --yes is required: this is the one sanctioned way to kill
 #       the aggregator, and only between our own rounds.
 #
-#   scripts/chaos.sh partition <name> [--rounds 6] [--after 2] [--seconds 90]
+#   scripts/chaos.sh partition <name> [--rounds 10] [--after 2] [--seconds 90]
 #       Starts a run that tolerates a missing site (min_nodes 2, round timeout 60 s), waits
 #       until round <after> is logged, then cuts the Azure site off from the aggregator: on
 #       that VM only, an iptables rule drops its outgoing traffic to the aggregator's Flower
 #       port. The rule is removed by a systemd timer on the VM after <seconds> even if this
 #       script or the Mac dies, so the partition always heals. No firewall is opened anywhere,
-#       and the Tailscale peer relay on that VM keeps working.
+#       and the Tailscale peer relay on that VM keeps working. After the heal it polls the
+#       aggregator's site list until the Azure site is online again and reports how long that took
+#       (a silent site goes offline and back online by heartbeat, which Flower does not log).
 #
 # Both print a timeline and the per-round table at the end. Start the sites first
 # (scripts/cloud_up.sh) and shut them down after (scripts/cloud_down.sh).
@@ -34,7 +36,7 @@ MODE="${1:-}"; NAME="${2:-}"
 [[ "$MODE" == kill || "$MODE" == partition ]] || usage
 [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] || { echo "name: 1-40 lower-case letters, digits or hyphens"; exit 1; }
 shift 2
-ROUNDS=6; AFTER=""; DP_NOISE=""; SECONDS_CUT=90; YES=0
+ROUNDS=""; AFTER=""; DP_NOISE=""; SECONDS_CUT=90; YES=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --rounds) ROUNDS="$2"; shift 2 ;;
@@ -46,6 +48,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$AFTER" ] || { [ "$MODE" = kill ] && AFTER=3 || AFTER=2; }
+[ -n "$ROUNDS" ] || { [ "$MODE" = kill ] && ROUNDS=6 || ROUNDS=10; }
 for v in "$ROUNDS" "$AFTER" "$SECONDS_CUT"; do [[ "$v" =~ ^[0-9]+$ ]] || { echo "numbers only: $v"; exit 1; }; done
 [ "$AFTER" -lt "$ROUNDS" ] || { echo "--after must be below --rounds"; exit 1; }
 [ -z "$DP_NOISE" ] || [[ "$DP_NOISE" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "--dp-noise: a number"; exit 1; }
@@ -65,6 +68,26 @@ post() {   # $1 = JSON body; prints the reply, fails unless a run was started
 rounds_logged() {   # training rounds in the run's rounds.jsonl (0 if none yet)
   # shellcheck disable=SC2029  # NAME is checked above
   ssh "ubuntu@$AGG" "grep -c train_round_seconds ~/fedfleet-runs-$NAME/rounds.jsonl 2>/dev/null" || true
+}
+online_nodes() {    # node ids the aggregator lists as online (heartbeat current), one line
+  ssh "ubuntu@$AGG" "cd ~ && ~/fedfleet/.venv/bin/flwr supernode ls fedfleet-vm --format json 2>/dev/null" | python3 -c '
+import json, sys
+try:
+    nodes = json.load(sys.stdin).get("nodes", [])
+except Exception:
+    nodes = []
+print(" ".join(n["node-id"] for n in nodes if n.get("status") == "online"))'
+}
+wait_online() {     # $1 = count|node, $2 = number of sites or a node id, $3 = timeout in s.
+  local t0 on; t0=$(date +%s)   # Echoes the aggregator's time when the condition holds.
+  while :; do
+    on=$(online_nodes)
+    if [ "$1" = count ]; then [ "$(wc -w <<<"$on")" -ge "$2" ] && { agg_now; return 0; }
+    else [[ " $on " == *" $2 "* ]] && { agg_now; return 0; }
+    fi
+    [ $(( $(date +%s) - t0 )) -ge "$3" ] && return 1
+    sleep 2
+  done
 }
 wait_rounds() {     # $1 = rounds to wait for, $2 = timeout in s
   local n t0; t0=$(date +%s)
@@ -119,11 +142,19 @@ if [ "$MODE" = kill ]; then
   done
   [ -n "$T_UP" ] || { echo "!! fedfleet-superlink did not come back within 60 s; check: systemctl status fedfleet-superlink"; exit 1; }
   echo "   back up at $T_UP; restarts so far: $(ssh "ubuntu@$AGG" 'systemctl show -p NRestarts --value fedfleet-superlink')"
-  echo "== waiting 30 s for the sites to reconnect (19 Nov: 12-21 s), then resuming"
-  sleep 30
+  echo "== waiting until the aggregator lists 3 sites online (up to 3 min), then resuming"
+  T_SITES=$(wait_online count 3 180) || { echo "!! fewer than 3 sites online after 3 min; resuming anyway (the run waits for them)"; T_SITES=""; }
+  [ -n "$T_SITES" ] && echo "   3 sites online at +$(python3 -c "print(f'{$T_SITES - $T_KILL:.1f}')") s"
   T_RESUME=$(agg_now)
   post "{\"name\":\"$NAME\",\"rounds\":$ROUNDS,\"min_nodes\":3,\"resume\":true$DP_JSON}" || { echo "!! resume was refused"; exit 1; }
 else
+  # shellcheck disable=SC2029
+  SITE_NODE=$(ssh "ubuntu@$AGG" "cat ~/fedfleet-runs-$NAME/rounds.jsonl" | python3 -c '
+import json, sys
+ids = {s.get("node") for l in sys.stdin if l.strip() for s in json.loads(l).get("sites", []) if s.get("site") == 2}
+print(next(iter(ids), ""))')
+  [ -n "$SITE_NODE" ] || { echo "!! site 2 is not in the logged rounds; is it running?"; exit 1; }
+  echo "   site 2 is node $SITE_NODE"
   STAMP=$(date +%s)
   RULE="OUTPUT -d $AGG_TS_IP -p tcp --dport $FLOWER_PORT -j DROP"
   echo "== cutting $SITE off from the aggregator for $SECONDS_CUT s (heal is scheduled on the VM first)"
@@ -131,7 +162,7 @@ else
   T_CUT=$(ssh "ubuntu@$SITE" "sudo systemd-run --quiet --unit fedfleet-chaos-heal-$STAMP --on-active=${SECONDS_CUT}s /usr/sbin/iptables -D $RULE \
           && sudo /usr/sbin/iptables -I $RULE && date +%s.%N") || { echo "!! could not apply the partition"; exit 1; }
   echo "   cut at $T_CUT (Azure VM clock), heals at about +$SECONDS_CUT s"
-  sleep "$SECONDS_CUT"; sleep 5
+  sleep "$SECONDS_CUT"; sleep 2
   # shellcheck disable=SC2029
   if ssh "ubuntu@$SITE" "sudo /usr/sbin/iptables -C $RULE 2>/dev/null"; then
     echo "!! the rule is still there; removing it now"
@@ -140,6 +171,9 @@ else
   else
     echo "   healed: the rule is gone"
   fi
+  echo "== waiting for the aggregator to list site 2 online again (up to 5 min)"
+  T_BACK=$(wait_online node "$SITE_NODE" 300) || { echo "!! site 2 not online 5 min after the heal"; T_BACK=""; }
+  [ -n "$T_BACK" ] && echo "   online again at $T_BACK"
 fi
 
 echo "== waiting for round $ROUNDS"
@@ -154,6 +188,7 @@ def env(k):
     v = os.environ.get(k)
     return float(v) if v else None
 kill, up, resume, cut = env("T_KILL"), env("T_UP"), env("T_RESUME"), env("T_CUT")
+sites_up, t_back = env("T_SITES"), env("T_BACK")
 heal = cut + float(os.environ["CUT"]) if cut else None
 def site_ids(r):
     return sorted(s.get("site") for s in r.get("sites", []) if s.get("site") is not None)
@@ -181,11 +216,15 @@ for r in rows:
         r["train_round_seconds"], r["global_acc"], eps, note))
 if kill:
     print("   aggregator back %.1f s after the kill; resume requested at +%.1f s" % (up - kill, resume - kill))
+    if sites_up:
+        print("   all 3 sites online %.1f s after the kill" % (sites_up - kill))
 if cut:
     trained = [r for r in rows if "train_round_seconds" in r]
     miss = [r["round"] for r in trained if r.get("timestamp", 0) > cut and 2 not in site_ids(r)]
     back = [r for r in trained if r.get("timestamp", 0) > heal and 2 in site_ids(r)]
     print("   site 2 missing in rounds %s" % miss)
+    if t_back:
+        print("   site 2 online again %.1f s after the heal (aggregator's site list; the heal time is the VM's clock + %s s)" % (t_back - heal, os.environ["CUT"]))
     if back:
         print("   site 2 back in round %s, logged %.1f s after the heal" % (back[0]["round"], back[0]["timestamp"] - heal))
     else:
@@ -193,4 +232,5 @@ if cut:
 PY
 # shellcheck disable=SC2029
 ssh "ubuntu@$AGG" "cat ~/fedfleet-runs-$NAME/rounds.jsonl" | \
-  T_KILL="${T_KILL:-}" T_UP="${T_UP:-}" T_RESUME="${T_RESUME:-}" T_CUT="${T_CUT:-}" CUT="$SECONDS_CUT" python3 "$REPORT"
+  T_KILL="${T_KILL:-}" T_UP="${T_UP:-}" T_SITES="${T_SITES:-}" T_RESUME="${T_RESUME:-}" T_CUT="${T_CUT:-}" \
+  T_BACK="${T_BACK:-}" CUT="$SECONDS_CUT" python3 "$REPORT"
