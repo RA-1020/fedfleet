@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Chaos drills for Layer 3 (resilience), run from the Mac against the live federation.
 #
-#   scripts/chaos.sh kill <name> [--rounds 6] [--after 3] [--dp-noise Z] --yes
+#   scripts/chaos.sh kill <name> [--rounds 6] [--after 3] [--dp-noise Z] [--secagg] --yes
 #       Starts a run, waits until round <after> is logged, waits 5 s more so the kill lands
 #       inside the next round, then SIGKILLs the aggregator (fedfleet-superlink). systemd
 #       restarts it (Restart=always, 5 s); the sites reconnect by themselves. As soon as the
@@ -10,7 +10,7 @@
 #       continue across the crash. --yes is required: this is the one sanctioned way to kill
 #       the aggregator, and only between our own rounds.
 #
-#   scripts/chaos.sh partition <name> [--rounds 10] [--after 2] [--seconds 90]
+#   scripts/chaos.sh partition <name> [--rounds 10] [--after 2] [--seconds 90] [--secagg]
 #       Starts a run that tolerates a missing site (min_nodes 2, round timeout 60 s), waits
 #       until round <after> is logged, then cuts the Azure site off from the aggregator: on
 #       that VM only, an iptables rule drops its outgoing traffic to the aggregator's Flower
@@ -20,7 +20,9 @@
 #       aggregator's site list until the Azure site is online again and reports how long that took
 #       (a silent site goes offline and back online by heartbeat, which Flower does not log).
 #
-# Both print a timeline and the per-round table at the end. Start the sites first
+# --secagg runs either drill under secure aggregation (SecAgg+): a partition then tests a site
+# dropping out of the protocol (two of three key shares are enough to unmask), a kill tests a
+# crash and resume of a SecAgg+ run. Both print a timeline and the per-round table at the end. Start the sites first
 # (scripts/cloud_up.sh) and shut them down after (scripts/cloud_down.sh).
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
@@ -36,7 +38,7 @@ MODE="${1:-}"; NAME="${2:-}"
 [[ "$MODE" == kill || "$MODE" == partition ]] || usage
 [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] || { echo "name: 1-40 lower-case letters, digits or hyphens"; exit 1; }
 shift 2
-ROUNDS=""; AFTER=""; DP_NOISE=""; SECONDS_CUT=90; YES=0
+ROUNDS=""; AFTER=""; DP_NOISE=""; SECONDS_CUT=90; YES=0; SECAGG=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --rounds) ROUNDS="$2"; shift 2 ;;
@@ -44,6 +46,7 @@ while [ $# -gt 0 ]; do
     --dp-noise) DP_NOISE="$2"; shift 2 ;;
     --seconds) SECONDS_CUT="$2"; shift 2 ;;
     --yes) YES=1; shift ;;
+    --secagg) SECAGG=1; shift ;;
     *) usage ;;
   esac
 done
@@ -118,12 +121,13 @@ echo "   none"
 
 DP_JSON=""
 [ -n "$DP_NOISE" ] && DP_JSON=",\"dp\":true,\"dp_noise_multiplier\":$DP_NOISE"
+[ "$SECAGG" = 1 ] && DP_JSON="$DP_JSON,\"secagg\":true"
 if [ "$MODE" = kill ]; then
   BODY="{\"name\":\"$NAME\",\"rounds\":$ROUNDS,\"min_nodes\":3$DP_JSON}"
 else
-  BODY="{\"name\":\"$NAME\",\"rounds\":$ROUNDS,\"min_nodes\":2,\"round_timeout\":60}"
+  BODY="{\"name\":\"$NAME\",\"rounds\":$ROUNDS,\"min_nodes\":2,\"round_timeout\":60$DP_JSON}"
 fi
-echo "== starting fedfleet-runs-$NAME ($MODE drill, $ROUNDS rounds)"
+echo "== starting fedfleet-runs-$NAME ($MODE drill, $ROUNDS rounds$([ "$SECAGG" = 1 ] && echo ", SecAgg+"))"
 post "$BODY" || { echo "!! the run did not start"; exit 1; }
 echo "== waiting for round $AFTER"
 wait_rounds "$AFTER" 1200 || exit 1
@@ -211,6 +215,9 @@ for r in rows:
     if kill and ts and ts > kill and not seen_after:
         seen_after = True
         note = "  <- first round after the kill, %.1f s after it" % (ts - kill)
+    sa = r.get("secagg")
+    if sa is not None:
+        note = (", SecAgg+" + ("" if sa.get("aggregated") else " not aggregated")) + note
     print("   round %s: %s/%s replied, sites %s, %.1f s, accuracy %.4f%s%s" % (
         r["round"], r.get("nodes_replied"), r.get("nodes_asked"), site_ids(r),
         r["train_round_seconds"], r["global_acc"], eps, note))

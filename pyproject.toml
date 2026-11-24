@@ -50,6 +50,6 @@ dp = false                  # central differential privacy, client-side clipping
 dp-noise-multiplier = 1.0   # Gaussian noise std = multiplier x clip norm / sites; 0 = clipping only
 dp-clip-norm = 1.5          # L2 bound on each site's update (measured norms about 1.5 after round 1)
 dp-delta = 0.00001          # delta at which epsilon is reported
-secagg = false              # secure aggregation (SecAgg+, fedfleet/secagg.py); not with dp or compression
+secagg = false              # secure aggregation (SecAgg+, fedfleet/secagg.py); works with dp, not with compression
 secagg-max-weight = 60000.0 # at least the largest site's sample count (weights are num_examples / this)
 secagg-clipping-range = 8.0 # SecAgg+ clips each weighted parameter to +-this before quantising

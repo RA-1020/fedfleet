@@ -91,14 +91,28 @@ def _secagg_train(msg: Message, context: Context) -> Message:
     trained = [part.state_dict()[k].detach().numpy() for k in keys]
     norm = float(np.sqrt(sum(float(np.sum((t.astype(np.float64) - r.astype(np.float64)) ** 2))
                              for t, r in zip(trained, received, strict=True))))
+    dp = bool(cfg.get("dp", False))
+    clipped = False
+    if dp:
+        # Central DP with client-side clipping, before secaggplus_mod masks anything.
+        clip = float(cfg["dp-clip-norm"])
+        if norm > clip:
+            scale = clip / norm
+            trained = [(r.astype(np.float64) + (t.astype(np.float64) - r.astype(np.float64)) * scale).astype(t.dtype)
+                       for t, r in zip(trained, received, strict=True)]
+            clipped = True
+    samples = len(trainloader.dataset)
     metrics = {
         "train_loss": float(loss),
         "train_seconds": time.perf_counter() - t0,
         "setup_seconds": setup_seconds,
         "site": int(context.node_config["partition-id"]),
         "update_norm": norm,
+        "samples": samples,
+        "clipped": int(clipped),
     }
-    fitres = FitRes(Status(Code.OK, "ok"), ndarrays_to_parameters(trained), len(trainloader.dataset), metrics)
+    # The weight SecAgg+ applies: the sample count, or 1 for every site under DP (equal weights).
+    fitres = FitRes(Status(Code.OK, "ok"), ndarrays_to_parameters(trained), 1 if dp else samples, metrics)
     return Message(compat.fitres_to_recorddict(fitres, keep_input=True), reply_to=msg)
 
 

@@ -131,9 +131,10 @@ def test_resume_rules_and_command():
 
 
 def test_secagg_settings_and_refusals():
-    for body in ({"secagg": True, "dp": True}, {"secagg": True, "compression": "int8"}):
-        r = c.post("/runs", json={"name": "sa-bad", **body}, headers=KEY)
-        assert r.status_code == 422 and "secagg" in r.json()["detail"], body
+    r = c.post("/runs", json={"name": "sa-bad", "secagg": True, "compression": "int8"}, headers=KEY)
+    assert r.status_code == 422 and "secagg" in r.json()["detail"]
+    cfg = api._run_config(api.RunRequest(name="sa", secagg=True, dp=True, dp_noise_multiplier=0.2), "/tmp/m")
+    assert "secagg=true" in cfg and "dp=true" in cfg
     cfg = api._run_config(api.RunRequest(name="sa"), "/tmp/m")
     assert "secagg=false" in cfg
     assert "secagg=true" in api._run_config(api.RunRequest(name="sa", secagg=True), "/tmp/m")

@@ -60,6 +60,27 @@ def test_ndarrays_to_state_restores_original_dtypes():
     assert all(v.dtype == torch.float32 for v in sd.values()) and float(sd["b"][0]) == 0.5
 
 
+def test_halted_round_writes_a_complete_row(tmp_path):
+    from fedfleet.comms import CommsFedAvg
+    from fedfleet.secagg import SecAggFedAvg
+    rec = CommsFedAvg(metrics_dir=str(tmp_path), head_only=True)
+    grid = CountingGrid(FakeGrid())
+    like = {"w": torch.zeros(3)}
+    strat = SecAggFedAvg(rec, grid, ["w"], like, {"max_weight": 1.0}, 0,
+                         dp={"noise_multiplier": 0.0, "clip_norm": 1.0, "sites": 3, "delta": 1e-5})
+    strat._asked, strat._t0 = [11, 12, 13], 0.0
+    rec._row = {"round": 2, "nodes_asked": 3, "bytes_per_update": 12, "secagg": {"aggregated": False}}
+    strat.close_halted_round()
+    r = rec._row
+    assert r["nodes_replied"] == 0 and r["nodes_dropped"] == 3 and r["nodes_missing"] == [11, 12, 13]
+    assert r["train_round_seconds"] > 0 and r["secagg"]["aggregated"] is False and r["dp"]["aggregated"] is False
+    rec.log_global(2, 0.5, 1.0)                       # flushes the row like any round
+    import json
+    row = json.loads((tmp_path / "rounds.jsonl").read_text().splitlines()[-1])
+    assert row["round"] == 2 and row["nodes_replied"] == 0 and "train_round_seconds" in row
+    strat.close_halted_round()                        # nothing pending: no-op
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -104,20 +104,21 @@ def main(grid: Grid, context: Context) -> None:
 
     if bool(cfg.get("secagg", False)):
         # Secure aggregation runs on Flower's legacy workflow (fedfleet/secagg.py). SecAgg+
-        # quantises updates itself, and DP under SecAgg+ is not wired yet: refuse both.
-        if dp is not None or compression != "none":
-            print("[FedFleet] secagg=true cannot be combined with dp or compression (yet); not starting")
-            return
-        if saved_dp is not None:
-            print("[FedFleet] this checkpoint comes from a DP run; resume it without secagg. Not resuming.")
+        # quantises updates itself, so FedFleet's compression is refused. DP works under it
+        # (clipping at the sites before masking, noise and accounting at the aggregator).
+        if compression != "none":
+            print("[FedFleet] secagg=true cannot be combined with compression; not starting")
             return
         max_weight = float(cfg.get("secagg-max-weight", 60000.0))
         clipping_range = float(cfg.get("secagg-clipping-range", 8.0))
         print(f"[FedFleet] secure aggregation (SecAgg+): {min_nodes} sites minimum, shares to all "
-              f"selected sites, threshold 2/3, max weight {max_weight:g}, clipping range {clipping_range:g}"
+              f"selected sites, threshold 2/3, "
+              + ("equal weights (DP)" if dp else f"max weight {max_weight:g}")
+              + f", clipping range {clipping_range:g}"
               + ("; site evaluation off under SecAgg+" if bool(cfg["site-eval"]) else ""))
         recorder = CommsFedAvg(metrics_dir=metrics_dir, head_only=head_only,
-                               round_offset=done_rounds, rates=rates)
+                               round_offset=done_rounds, rates=rates, dp=dp,
+                               dp_state=json.loads(saved_dp) if (saved_dp and noisy) else None)
 
         def evaluate_global(server_round: int, sd: dict) -> tuple[float, float]:
             part.load_state_dict(sd)
@@ -127,7 +128,7 @@ def main(grid: Grid, context: Context) -> None:
                            round_offset=done_rounds, min_nodes=min_nodes,
                            fraction_train=float(cfg["fraction-train"]),
                            timeout=float(cfg["round-timeout"]), evaluate_global=evaluate_global,
-                           max_weight=max_weight, clipping_range=clipping_range)
+                           max_weight=max_weight, clipping_range=clipping_range, dp=dp)
         torch.save(final, Path(metrics_dir) / "final_exchanged.pt")
         print(f"[FedFleet] done; metrics in {metrics_dir}/rounds.jsonl")
         return

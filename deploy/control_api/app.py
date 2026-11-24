@@ -145,7 +145,7 @@ class RunRequest(BaseModel):
     dp_noise_multiplier: float = Field(1.0, ge=0.0, le=10.0)
     dp_clip_norm: float = Field(1.5, gt=0.0, le=100.0)
     dp_delta: float = Field(1e-5, gt=0.0, lt=1.0)
-    secagg: bool = Field(False, description="secure aggregation (SecAgg+); not with dp or compression")
+    secagg: bool = Field(False, description="secure aggregation (SecAgg+); works with dp, not with compression")
     resume: bool = Field(False, description="continue fedfleet-runs-<name> from its latest_checkpoint.pt; "
                                              "rounds is then the total to reach, not the number to add")
 
@@ -197,9 +197,9 @@ def _run_config(req: RunRequest, metrics_dir: str) -> str:
 def start_run(req: RunRequest) -> dict:
     if not RUN_NAME.match(req.name):
         raise HTTPException(422, "name must be 1-40 lower-case letters, digits or hyphens")
-    if req.secagg and (req.dp or req.compression != "none"):
-        raise HTTPException(422, "secagg cannot be combined with dp or compression: SecAgg+ quantises "
-                                 "updates itself, and DP under SecAgg+ is not wired yet")
+    if req.secagg and req.compression != "none":
+        raise HTTPException(422, "secagg cannot be combined with compression: SecAgg+ quantises "
+                                 "updates itself, and masked values do not compress")
     metrics_dir = HOME / f"fedfleet-runs-{req.name}"
     done = None
     if req.resume:

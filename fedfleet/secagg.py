@@ -11,7 +11,13 @@ Under SecAgg+:
 - the masked vectors travel inside config records, not arrays, so bytes are counted at the
   message level (`CountingGrid`), across all four protocol stages of a round;
 - SecAgg+ quantises the parameters itself (clipped to +-clipping_range), so FedFleet's
-  compression is off, and DP is not combined with it yet (refused in server_app.py);
+  compression is off (refused in server_app.py);
+- with DP (central DP, client-side clipping, as in the plain path): each site clips its update
+  to the clipping norm before masking and reports weight 1, max_weight is 1 so the masked sum is
+  the plain mean at full quantiser resolution, and the aggregator adds Gaussian noise of standard
+  deviation z * C / n to the unmasked mean and records the release in the same RDP accountant
+  (ledger in the checkpoint). A round with fewer than n replies is not released (no privacy
+  spent), as Flower's own DP wrapper does;
 - weights are num_examples / max_weight, so max_weight must be at least the largest site's
   sample count, or the sites' weights overflow (Flower warns but carries on);
 - per-site turnaround is not available (the legacy results carry no message timestamps).
@@ -28,6 +34,8 @@ from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
 from flwr.server import LegacyContext, ServerConfig
 from flwr.server.strategy import FedAvg as LegacyFedAvg
 from flwr.server.workflow import DefaultWorkflow, SecAggPlusWorkflow
+
+from fedfleet.comms import DP_FRACTION
 
 
 def _value_bytes(v) -> int:
@@ -106,8 +114,10 @@ class SecAggFedAvg(LegacyFedAvg):
     """Legacy FedAvg that writes FedFleet's round rows through a CommsFedAvg recorder."""
 
     def __init__(self, recorder, grid: CountingGrid, keys: list[str], like: dict,
-                 secagg_info: dict, round_offset: int, **kwargs) -> None:
+                 secagg_info: dict, round_offset: int, dp: dict | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
+        self.dp = dp
+        self._rng = np.random.default_rng()
         self.rec = recorder
         self.grid = grid
         self.keys = keys
@@ -139,6 +149,8 @@ class SecAggFedAvg(LegacyFedAvg):
 
     def aggregate_fit(self, server_round, results, failures):
         params, metrics = super().aggregate_fit(server_round, results, failures)
+        if self.dp is not None:
+            params = self._privatise(params, len(results))
         if params is not None:
             # SecAgg+ dequantises to float64; send the next round in the model's own dtypes
             # (float32), or every later download doubles in size.
@@ -168,6 +180,49 @@ class SecAggFedAvg(LegacyFedAvg):
             self.rec._checkpoint(server_round + self.offset, ArrayRecord(torch_state_dict=state))
         return params, metrics
 
+    def close_halted_round(self) -> None:
+        """Complete the round's row when SecAgg+ stopped before aggregating.
+
+        The workflow halts a round (and never calls aggregate_fit) when too few sites take part
+        or too few key shares come back; in Flower 1.38 that includes a site that was sampled
+        but died before sharing its keys. The round then releases nothing; its row says so, so
+        drills, dashboards and costs still see the round.
+        """
+        row = self.rec._row
+        if not row or "nodes_replied" in row:
+            return
+        row.update({
+            "nodes_replied": 0,
+            "nodes_dropped": len(self._asked),
+            "bytes_down": self.grid.down,
+            "bytes_up": self.grid.up,
+            "train_round_seconds": round(time.perf_counter() - self._t0, 3),
+            "nodes_missing": sorted(self._asked),
+            "sites": [],
+            "errors": [{"node": None, "code": None, "reason": "secure aggregation halted (too few sites or key shares)"}],
+        })
+        row["secagg"].update({"aggregated": False, "exchanges": self.grid.exchanges})
+        if self.dp is not None:
+            self._privatise(None, 0)
+
+    def _privatise(self, params, replies: int):
+        """Central DP on the unmasked mean: noise, accounting, and no release on a short round."""
+        dp, rec = self.dp, self.rec
+        n, z, c = int(dp["sites"]), float(dp["noise_multiplier"]), float(dp["clip_norm"])
+        released = params is not None and replies == n
+        if released and z > 0:
+            std = z * c / n
+            arrays = [a + self._rng.normal(0.0, std, a.shape) for a in parameters_to_ndarrays(params)]
+            params = ndarrays_to_parameters(arrays)
+            from flwr.supercore.privacy_accounting import GaussianPrivacyEvent
+            rec.accountant.compose(GaussianPrivacyEvent(noise_multiplier=z, sample_size=n, population_size=n))
+        spent = rec.accountant.get_privacy_spent() if rec.accountant is not None else None
+        rec._row["dp"] = {"noise_multiplier": z, "clip_norm": c, "sites": n, "delta": float(dp["delta"]),
+                          "epsilon": None if spent is None else float(spent.epsilon),
+                          "releases": None if spent is None else int(spent.num_releases),
+                          "aggregated": released}
+        return params if released else None
+
     def _site_rows(self, results) -> list[dict]:
         rows = []
         for proxy, fr in results:
@@ -176,7 +231,8 @@ class SecAggFedAvg(LegacyFedAvg):
             rows.append({
                 "site": None if m.get("site") is None else int(m["site"]),
                 "node": node,
-                "num_examples": int(fr.num_examples),
+                # Under DP every site reports weight 1 to SecAgg+; its sample count is a metric.
+                "num_examples": int(m["samples"]) if m.get("samples") is not None else int(fr.num_examples),
                 "train_loss": m.get("train_loss"),
                 "setup_seconds": None if m.get("setup_seconds") is None else round(float(m["setup_seconds"]), 3),
                 "train_seconds": None if m.get("train_seconds") is None else round(float(m["train_seconds"]), 3),
@@ -184,6 +240,7 @@ class SecAggFedAvg(LegacyFedAvg):
                 # in the cost model reflects what SecAgg+ really sends.
                 "bytes_up": self.grid.up_by_node.get(node),
                 "update_norm": None if m.get("update_norm") is None else round(float(m["update_norm"]), 6),
+                "clipped": None if m.get("clipped") is None else int(m["clipped"]),
                 "turnaround_seconds": None,
             })
         rows.sort(key=lambda r: (r["site"] is None, r["site"] if r["site"] is not None else 0, r["node"]))
@@ -192,7 +249,7 @@ class SecAggFedAvg(LegacyFedAvg):
 
 def run_secagg(grid, context, *, recorder, state: dict, num_rounds: int, round_offset: int,
                min_nodes: int, fraction_train: float, timeout: float, evaluate_global,
-               max_weight: float, clipping_range: float) -> dict:
+               max_weight: float, clipping_range: float, dp: dict | None = None) -> dict:
     """Run `num_rounds` SecAgg+ rounds; returns the final exchanged state dict.
 
     evaluate_global(server_round, state_dict) -> (loss, acc) on the public test set; its
@@ -201,11 +258,18 @@ def run_secagg(grid, context, *, recorder, state: dict, num_rounds: int, round_o
     """
     keys, arrays = state_to_ndarrays(state)
     counting = CountingGrid(grid)
+    if dp is not None:
+        # Equal weights (each site reports 1): the mean SecAgg+ unmasks is the plain mean the
+        # accountant assumes, and weight 1 of max_weight 1 uses the quantiser's full range.
+        max_weight = 1.0
+        fraction_train = DP_FRACTION      # ask exactly min_nodes sites (fixed sample size)
     info = {"num_shares": "all selected", "reconstruction_threshold": "2/3 of shares, at least 2",
-            "max_weight": max_weight, "clipping_range": clipping_range}
+            "max_weight": max_weight, "clipping_range": clipping_range, "equal_weights": dp is not None}
     final: dict = {"state": state}
 
     def evaluate_fn(server_round, ndarrays, config):
+        if server_round > 0:
+            strategy.close_halted_round()
         sd = ndarrays_to_state(keys, ndarrays, state)
         final["state"] = sd
         loss, acc = evaluate_global(server_round, sd)
@@ -213,7 +277,7 @@ def run_secagg(grid, context, *, recorder, state: dict, num_rounds: int, round_o
         return loss, {"global_acc": acc}
 
     strategy = SecAggFedAvg(
-        recorder, counting, keys, state, info, round_offset,
+        recorder, counting, keys, state, info, round_offset, dp,
         fraction_fit=fraction_train, fraction_evaluate=0.0,
         min_fit_clients=min_nodes, min_evaluate_clients=min_nodes, min_available_clients=min_nodes,
         initial_parameters=ndarrays_to_parameters(arrays),
