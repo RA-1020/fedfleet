@@ -3,6 +3,7 @@
 
     python3 scripts/slo_report.py                 on the aggregator (reads ~/fedfleet-runs*)
     python3 scripts/slo_report.py --root <dir>    any folder holding fedfleet-runs-* copies
+    python3 scripts/slo_report.py --since 2026-11-24   only rounds written on or after that day (UTC)
 
 Round-level objectives are computed over every training round on record. Runs that injected a
 fault on purpose (chaos drills, residency and capacity checks) are counted separately for the
@@ -12,13 +13,14 @@ drills (D2 section 9) and are not recomputed here. Folders ending in -void are i
 from __future__ import annotations
 
 import argparse
+import datetime
 import glob
 import json
 import os
 import re
 import statistics
 
-DRILL = re.compile(r"(part|kill|res-eu|nosites|drop|chaos)")
+DRILL = re.compile(r"(part|kill|crash|res-eu|nosites|drop|chaos)")
 
 # (name, target, unit) - the numbers D2 states as FedFleet's objectives.
 ROUND_PLAIN_S = 60.0     # 95% of plain rounds within this
@@ -55,16 +57,24 @@ def pct(values: list[float], q: float) -> float:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--root", default="~")
+    p.add_argument("--since", help="YYYY-MM-DD (UTC): only rounds written on or after this day")
     a = p.parse_args()
     runs = load(a.root)
     rows = [(n, r) for n, rs in runs.items() for r in rs]
+    if a.since:
+        t0 = datetime.datetime.strptime(a.since, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc).timestamp()
+        rows = [(n, r) for n, r in rows if (r.get("timestamp") or 0) >= t0]
+        runs = {n: None for n, _ in rows}
     if not rows:
         raise SystemExit("no training rounds found")
     print(f"{len(runs)} runs, {len(rows)} training rounds\n")
 
     print("| Objective | Target | Measured | Met |")
     print("|---|---|---|---|")
-    for label, sel, limit in (("Plain round time", lambda r: "secagg" not in r, ROUND_PLAIN_S),
+    for label, sel, limit in (("Plain round time, head-only (the production mode)",
+                               lambda r: "secagg" not in r and r.get("mode") != "full-model", ROUND_PLAIN_S),
+                              ("(for reference) plain round time, full model (E9 baseline)",
+                               lambda r: "secagg" not in r and r.get("mode") == "full-model", ROUND_PLAIN_S),
                               ("SecAgg+ round time (aggregated rounds)",
                                lambda r: "secagg" in r and r["secagg"].get("aggregated"), ROUND_SECAGG_S)):
         t = [float(r["train_round_seconds"]) for _, r in rows if sel(r) and r.get("train_round_seconds") is not None]
