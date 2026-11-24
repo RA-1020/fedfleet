@@ -3,7 +3,7 @@
     python deploy/backup/blob_backup.py --sas-file ~/.fedfleet-blob-sas
 
 Every --interval seconds it looks at each run folder (~/fedfleet-runs*, one level of
-subfolders too) and uploads latest_checkpoint.pt, rounds.jsonl and final_exchanged.pt, but
+subfolders too) and the access log (~/fedfleet-audit/audit.jsonl) and uploads the files in FILES, but
 only files whose size or modification time changed since their last successful upload, so an
 idle aggregator makes no requests at all. The blob name is the file's path under the home
 folder, e.g. fedfleet-runs-crash/latest_checkpoint.pt.
@@ -30,8 +30,10 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-FILES = ("latest_checkpoint.pt", "rounds.jsonl", "final_exchanged.pt", "model.onnx", "model_card.md")
-PATTERNS = ["~/fedfleet-runs*/{f}", "~/fedfleet-runs*/*/{f}"]
+FILES = ("latest_checkpoint.pt", "rounds.jsonl", "final_exchanged.pt", "model.onnx", "model_card.md",
+         "dp_budget.json", "audit.jsonl")
+# Run folders, and the control API's access log (so a copy of it exists off the VM).
+PATTERNS = ["~/fedfleet-runs*/{f}", "~/fedfleet-runs*/*/{f}", "~/fedfleet-audit/{f}"]
 API_VERSION = "2021-12-02"
 
 

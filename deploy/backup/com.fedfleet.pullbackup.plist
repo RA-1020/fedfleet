@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Nightly third backup copy on the Mac (scripts/pull_backup.sh) at 02:30. If the Mac is asleep
+     then, launchd runs it once when it wakes. Install: see deploy/backup/README or the D2 report.
+     REPO is replaced with the repository's path when installed. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.fedfleet.pullbackup</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>REPO/scripts/pull_backup.sh</string></array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>30</integer></dict>
+  <key>StandardOutPath</key><string>HOME/FedFleetBackup/pull.log</string>
+  <key>StandardErrorPath</key><string>HOME/FedFleetBackup/pull.log</string>
+</dict>
+</plist>

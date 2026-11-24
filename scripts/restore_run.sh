@@ -2,6 +2,7 @@
 # Restore drill (disaster recovery): rebuild a run folder on the aggregator from the Azure Blob
 # backup, under a NEW name, so it can be resumed with POST /runs {"name": <new>, "resume": true}.
 #   scripts/restore_run.sh fedfleet-runs-<source> <new-name>
+#   FROM=<snapshot folder> scripts/restore_run.sh ...   restore from the Mac copy instead of Blob
 # Runs on the Mac. The VM's own SAS token can only create and write blobs, so a compromised VM
 # cannot read the backups; the download happens here instead, with the Azure CLI's login
 # (--auth-mode key: the CLI fetches the storage account key itself and never prints it).
@@ -33,10 +34,18 @@ if ssh "ubuntu@$AGG" "test -e ~/$DEST"; then
   echo "!! ~/$DEST already exists on $AGG; pick another name"; exit 1
 fi
 
-echo "== downloading $SRC/* from Blob ($ACCOUNT/$CONTAINER)"
-az storage blob download-batch --account-name "$ACCOUNT" --source "$CONTAINER" \
-  --destination "$WORK" --pattern "$SRC/*" --auth-mode key --only-show-errors --output none \
-  || { echo "!! download failed (signed in? az login)"; exit 1; }
+if [ -n "${FROM:-}" ]; then
+  # Third copy: a snapshot made by scripts/pull_backup.sh on this Mac, e.g.
+  #   FROM=~/FedFleetBackup/snapshots/2026-11-25T0230 scripts/restore_run.sh fedfleet-runs-x new
+  echo "== copying $SRC from the local snapshot $FROM"
+  [ -d "$FROM/$SRC" ] || { echo "!! $FROM/$SRC not found"; exit 1; }
+  mkdir -p "$WORK/$SRC" && cp -p "$FROM/$SRC"/* "$WORK/$SRC"/ || { echo "!! copy failed"; exit 1; }
+else
+  echo "== downloading $SRC/* from Blob ($ACCOUNT/$CONTAINER)"
+  az storage blob download-batch --account-name "$ACCOUNT" --source "$CONTAINER" \
+    --destination "$WORK" --pattern "$SRC/*" --auth-mode key --only-show-errors --output none \
+    || { echo "!! download failed (signed in? az login)"; exit 1; }
+fi
 t1=$(date +%s)
 if [ ! -f "$WORK/$SRC/latest_checkpoint.pt" ] || [ ! -f "$WORK/$SRC/rounds.jsonl" ]; then
   echo "!! the backup of $SRC has no latest_checkpoint.pt or rounds.jsonl; nothing to resume from"
@@ -60,7 +69,7 @@ else
     echo "   identical: latest_checkpoint.pt and rounds.jsonl match the VM byte for byte"
   else
     echo "!! differs from the VM copy (the backup may be one cycle behind a run in progress):"
-    echo "$orig" | sed 's/^/   VM:   /'; echo "$local_sums" | sed 's/^/   Blob: /'
+    echo "$orig" | sed 's/^/   VM:     /'; echo "$local_sums" | sed 's/^/   backup: /'
   fi
 fi
 
