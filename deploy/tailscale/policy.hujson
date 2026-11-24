@@ -1,0 +1,66 @@
+// FedFleet tailnet policy (Tailscale admin console > Access controls > JSON editor).
+// This file is the source of truth: change it here, review it, then paste it into the editor.
+// Saving runs the tests below; a change that breaks them is refused.
+// Live since 24 Nov 2026. Rollback: add {"src": ["*"], "dst": ["*"], "ip": ["*"]} as the
+// first grant (allow-all) and save.
+{
+	"tagOwners": {
+		"tag:aggregator":        ["autogroup:admin"],
+		"tag:site":              ["autogroup:admin"],
+		// Where an aggregator runs (what its sites' updates are sent to).
+		"tag:region-ap-mumbai":  ["autogroup:admin"],
+		// Which aggregator regions a site allows its updates to go to.
+		"tag:residency-apac":    ["autogroup:admin"],
+		"tag:residency-eu":      ["autogroup:admin"],
+	},
+
+	"grants": [
+		// FedFleet admins (the tailnet owner): every device, every port.
+		{"src": ["autogroup:admin"], "dst": ["*"], "ip": ["*"]},
+
+		// Data residency: a site may join only an aggregator in a region it allows.
+		{"src": ["tag:residency-apac"], "dst": ["tag:region-ap-mumbai"], "ip": ["tcp:9092"]},
+
+		// Teammates: SSH and ping to the aggregator only.
+		{"src": ["autogroup:member"], "dst": ["tag:aggregator"], "ip": ["tcp:22", "icmp:*"]},
+
+		// Azure site 2 is a peer relay (Mac to aggregator path).
+		{
+			"src": ["autogroup:member", "tag:aggregator", "tag:site"],
+			"dst": ["100.127.25.47"],
+			"app": {"tailscale.com/cap/relay": []},
+		},
+	],
+
+	// The aggregator and the Azure site run Tailscale SSH, so these rules decide who may log in.
+	"ssh": [
+		{
+			"action": "check",
+			"src":    ["autogroup:member"],
+			"dst":    ["autogroup:self"],
+			"users":  ["autogroup:nonroot", "root"],
+		},
+		{
+			"action": "check",
+			"src":    ["autogroup:admin"],
+			"dst":    ["tag:aggregator", "tag:site"],
+			"users":  ["autogroup:nonroot", "root"],
+		},
+	],
+
+	"tests": [
+		// Residency: an APAC site may join the Mumbai aggregator; an EU-only site may not.
+		{"src": "tag:residency-apac", "accept": ["tag:region-ap-mumbai:9092"], "deny": ["tag:region-ap-mumbai:22", "tag:region-ap-mumbai:3000"]},
+		{"src": "tag:residency-eu", "deny": ["tag:region-ap-mumbai:9092", "tag:region-ap-mumbai:22"]},
+		// A site with no residency tag may join nothing.
+		{"src": "tag:site", "deny": ["tag:aggregator:9092", "tag:aggregator:22", "tag:aggregator:8000"]},
+		// The aggregator cannot open connections to the Mac.
+		{"src": "tag:aggregator", "deny": ["100.115.211.106:22"]},
+		// The owner keeps everything FedFleet uses.
+		{"src": "RA-1020@github", "accept": ["tag:aggregator:22", "tag:aggregator:9092", "tag:aggregator:8000", "tag:aggregator:3000", "tag:aggregator:9090", "100.127.25.47:22"]},
+	],
+
+	"sshTests": [
+		{"src": "RA-1020@github", "dst": ["tag:aggregator"], "check": ["ubuntu"]},
+	],
+}
