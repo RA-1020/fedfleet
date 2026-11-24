@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "secagg-spike"
+version = "1.0.0"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["spike"]
+
+[tool.flwr.app]
+publisher = "fedfleet"
+
+[tool.flwr.app.components]
+serverapp = "spike.server:app"
+clientapp = "spike.client:app"
+
+[tool.flwr.app.config]
+secagg = true
+num-rounds = 3
+size = 6923                 # the task head's parameter count
+out = "~/secagg-spike.json"   # per-round results (aggregator side)
