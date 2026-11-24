@@ -50,7 +50,16 @@ export default {
       if (!success) return json(429, { error: "rate limit exceeded, try again in a minute" });
     }
 
-    const headers = new Headers({ "x-fedfleet-origin-key": env.ORIGIN_KEY });
+    // Who is calling, for the control API's audit log: the caller's address and client as
+    // Cloudflare saw them, and a short fingerprint of the token (never the token itself).
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)));
+    const tokenId = Array.from(digest.slice(0, 6), (b) => b.toString(16).padStart(2, "0")).join("");
+    const headers = new Headers({
+      "x-fedfleet-origin-key": env.ORIGIN_KEY,
+      "x-fedfleet-client-ip": request.headers.get("cf-connecting-ip") || "unknown",
+      "x-fedfleet-client-agent": (request.headers.get("user-agent") || "").slice(0, 200),
+      "x-fedfleet-token-id": tokenId,
+    });
     let body;
     if (request.method === "POST") {
       headers.set("content-type", "application/json");

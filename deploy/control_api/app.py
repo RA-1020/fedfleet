@@ -17,6 +17,9 @@ Settings come from the environment (systemd EnvironmentFile, mode 600):
     FEDFLEET_ORIGIN_KEY   required; the gateway sends it as X-FedFleet-Origin-Key
     FEDFLEET_DIR          default ~/fedfleet (the project, its venv and data on this VM)
     FEDFLEET_CONNECTION   default fedfleet-vm (the [superlink.*] entry in ~/.flwr/config.toml)
+    FEDFLEET_AUDIT        default ~/fedfleet-audit/audit.jsonl: one JSON line per request (who,
+                          what, outcome); the gateway supplies the caller's address, client and
+                          a fingerprint of the token used, never the token
 Costs are list prices before free tiers and credits, from deploy/rates.toml.
 """
 from __future__ import annotations
@@ -30,7 +33,7 @@ import sys
 import time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -49,6 +52,49 @@ from fedfleet_report import parse_rows, summarize  # noqa: E402
 
 app = FastAPI(title="FedFleet control API", version="0.1.0",
               description="Status, runs and cost of the FedFleet federation; starts runs.")
+
+AUDIT = Path(os.environ.get("FEDFLEET_AUDIT", str(HOME / "fedfleet-audit" / "audit.jsonl"))).expanduser()
+
+
+def _audit(entry: dict) -> None:
+    """Append one line to the audit log. A failure to write is reported, never fatal."""
+    try:
+        AUDIT.parent.mkdir(parents=True, exist_ok=True)
+        with AUDIT.open("a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as e:
+        print(f"audit log not written: {e}", file=sys.stderr)
+
+
+@app.middleware("http")
+async def audit_requests(request: Request, call_next):
+    """Record every request except /healthz: when, who (as the gateway saw them), what, outcome.
+
+    Caller details come from headers the gateway sets; they count only when the request also
+    carried the right origin key, so a caller that bypassed the gateway cannot fake them."""
+    t0 = time.time()
+    response = await call_next(request)
+    if request.url.path == "/healthz":
+        return response
+    try:   # the audit log must never break a request
+        want = os.environ.get("FEDFLEET_ORIGIN_KEY", "")
+        via_gateway = bool(want) and hmac.compare_digest(
+            request.headers.get("x-fedfleet-origin-key", "").encode(), want.encode())
+        h = request.headers
+        agent = h.get("x-fedfleet-client-agent") if via_gateway else h.get("user-agent")
+        entry = {
+            "time": round(t0, 3), "method": request.method, "path": request.url.path,
+            "status": response.status_code, "via_gateway": via_gateway,
+            "client_ip": h.get("x-fedfleet-client-ip") if via_gateway else (request.client.host if request.client else None),
+            "client_agent": (agent or "")[:200] or None,
+            "token_id": h.get("x-fedfleet-token-id") if via_gateway else None,
+            "ms": round((time.time() - t0) * 1000),
+        }
+        entry.update(getattr(request.state, "audit", None) or {})
+        _audit(entry)
+    except Exception as e:  # noqa: BLE001
+        print(f"audit log not written: {e!r}", file=sys.stderr)
+    return response
 
 
 def require_key(x_fedfleet_origin_key: str = Header(default="")) -> None:
@@ -242,7 +288,9 @@ def _run_config(req: RunRequest, metrics_dir: str) -> str:
 
 
 @app.post("/runs", status_code=202, dependencies=[Depends(require_key)])
-def start_run(req: RunRequest) -> dict:
+def start_run(req: RunRequest, request: Request) -> dict:
+    # What was asked, for the audit log (allow-listed settings only; there are no secrets here).
+    request.state.audit = {"run": req.name, "request": req.model_dump()}
     if not RUN_NAME.match(req.name):
         raise HTTPException(422, "name must be 1-40 lower-case letters, digits or hyphens")
     if req.secagg and req.compression != "none":
@@ -323,6 +371,7 @@ def start_run(req: RunRequest) -> dict:
     # Remember which run uses this folder, so a resume cannot start while it is still going.
     metrics_dir.mkdir(parents=True, exist_ok=True)
     (metrics_dir / "active_run.json").write_text(json.dumps({"run_id": m.group(1), "resume": req.resume}) + "\n")
+    request.state.audit["run_id"] = m.group(1)
     return {"run_id": m.group(1), "run": f"fedfleet-runs-{req.name}", "rounds": req.rounds,
             "min_nodes": req.min_nodes, "compression": req.compression, "dp": req.dp,
             "dp_max_epsilon": req.dp_max_epsilon or None, "resume": req.resume, "secagg": req.secagg, "rounds_done_before": done, "watch": f"/runs/fedfleet-runs-{req.name}"}

@@ -11,6 +11,7 @@ HOME = Path(tempfile.mkdtemp())
 os.environ["HOME"] = str(HOME)
 os.environ["FEDFLEET_DIR"] = str(ROOT)
 os.environ["FEDFLEET_ORIGIN_KEY"] = "test-origin-key"
+os.environ["FEDFLEET_AUDIT"] = str(HOME / "audit.jsonl")
 sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "deploy" / "control_api"))
 from test_cost import ROWS  # noqa: E402
@@ -245,3 +246,25 @@ def test_busy_run_and_too_few_sites_refused():
         assert json.loads((HOME / "fedfleet-runs-marked" / "active_run.json").read_text())["run_id"] == "55"
     finally:
         api.subprocess.run = orig
+
+
+def test_audit_log_records_who_what_and_outcome():
+    log = Path(os.environ["FEDFLEET_AUDIT"])
+    before = len(log.read_text().splitlines()) if log.exists() else 0
+    gw = {**KEY, "x-fedfleet-client-ip": "203.0.113.7", "x-fedfleet-client-agent": "curl/8",
+          "x-fedfleet-token-id": "a1b2c3d4e5f6"}
+    c.get("/healthz")                                               # not logged
+    c.get("/status", headers={"x-fedfleet-client-ip": "198.51.100.1"})   # no key: 401, faked IP ignored
+    orig = api.subprocess.run
+    api.subprocess.run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "Successfully started run 77\n", "")
+    try:
+        assert c.post("/runs", json={"name": "audited", "rounds": 2}, headers=gw).status_code == 202
+    finally:
+        api.subprocess.run = orig
+    rows = [json.loads(l) for l in log.read_text().splitlines()[before:]]
+    assert [r["path"] for r in rows] == ["/status", "/runs"]
+    denied, started = rows
+    assert denied["status"] == 401 and not denied["via_gateway"] and denied["client_ip"] != "198.51.100.1"
+    assert started["status"] == 202 and started["via_gateway"] and started["client_ip"] == "203.0.113.7"
+    assert started["token_id"] == "a1b2c3d4e5f6" and started["run"] == "audited" and started["run_id"] == "77"
+    assert started["request"]["rounds"] == 2 and "test-origin-key" not in log.read_text()

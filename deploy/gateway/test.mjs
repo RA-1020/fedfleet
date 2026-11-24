@@ -24,6 +24,9 @@ assert.equal(r.status, 200);
 assert.equal(calls[0].u, "http://127.0.0.1:8088/status");
 assert.equal(calls[0].init.headers.get("x-fedfleet-origin-key"), "origin-key");
 assert.equal(calls[0].init.headers.get("authorization"), null, "user token not passed upstream");
+assert.match(calls[0].init.headers.get("x-fedfleet-token-id"), /^[0-9a-f]{12}$/, "token fingerprint for the audit log");
+assert.ok(!calls[0].init.headers.get("x-fedfleet-token-id").includes("tok"), "fingerprint, not the token");
+assert.ok(calls[0].init.headers.get("x-fedfleet-client-ip"), "caller address for the audit log");
 
 r = await req("/runs", { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: '{"name":"demo","rounds":2}' });
 assert.equal(r.status, 200);
