@@ -25,6 +25,8 @@ if [ -n "$active" ] && [ "${FORCE:-0}" != 1 ]; then echo "!! runs still marked a
 echo "   none"
 
 echo "== copying the spike app to the aggregator"
+# rsync creates only the last folder of the target path, so make the parents first.
+ssh "ubuntu@$AGG" 'mkdir -p ~/fedfleet/experiments/secagg_spike' || exit 1
 rsync -a --exclude __pycache__ experiments/secagg_spike/ "ubuntu@$AGG:fedfleet/experiments/secagg_spike/" || exit 1
 
 IDS=()
