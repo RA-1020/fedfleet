@@ -52,6 +52,71 @@ DP_WEIGHT_KEY = "dp-weight"
 DP_FRACTION = 1e-6
 
 
+def affordable_releases(dp: dict, dp_state: dict | None, budget: float, wanted: int) -> tuple[int, float, float]:
+    """How many more DP releases fit under max_epsilon (Flower's budget), given the ledger so far.
+
+    Flower's DP wrapper enforces the same limit by raising PrivacyBudgetExhausted at the start
+    of the round that would pass it, which ends the run with an error. FedFleet asks this
+    function first and runs only the rounds that fit, so the run ends cleanly at the last one;
+    Flower's check stays armed behind it. Same accountant, same event, same "> limit" test.
+
+    Every round releases at most one noised model and composes the same Gaussian event
+    (noise multiplier z, all `sites` sampled from a population of `sites`), so the epsilon
+    after k more releases is known before the run starts. A round with fewer replies
+    releases nothing and spends nothing, so the real epsilon can only be lower.
+    Returns (k, epsilon now, epsilon after k releases); k is at most `wanted`.
+    """
+    from flwr.serverapp import NeighboringRelation, PrivacyConfig, RdpAccountant, SamplingMethod
+    from flwr.supercore.privacy_accounting import GaussianPrivacyEvent
+
+    def fresh() -> RdpAccountant:
+        acc = RdpAccountant(PrivacyConfig(
+            target_delta=float(dp["delta"]), population_size=int(dp["sites"]),
+            neighboring_relation=NeighboringRelation.ADD_OR_REMOVE_ONE,
+            sampling_method=SamplingMethod.NO_AMPLIFICATION,
+            max_epsilon=dp.get("max_epsilon")))
+        if dp_state is not None:
+            acc.load_state_dict(dp_state)
+        return acc
+
+    def eps(acc: RdpAccountant) -> float:
+        spent = acc.get_privacy_spent()
+        return 0.0 if spent.num_releases == 0 else float(spent.epsilon)
+
+    acc = fresh()
+    now = eps(acc)
+    n, z = int(dp["sites"]), float(dp["noise_multiplier"])
+    k, after = 0, now
+    while k < wanted:
+        acc.compose(GaussianPrivacyEvent(noise_multiplier=z, sample_size=n, population_size=n))
+        e = eps(acc)
+        if e > budget:
+            break
+        k, after = k + 1, e
+    return k, now, after
+
+
+def ledger_max_epsilon(dp_state: dict | None) -> float | None:
+    """The max_epsilon stored in a saved Flower privacy ledger (None if it had no budget)."""
+    if not dp_state:
+        return None
+    value = (dp_state.get("config") or {}).get("max_epsilon")
+    return None if value is None else float(value)
+
+
+def write_budget_note(metrics_dir: str, budget: float, last_round: int, done_before: int,
+                      epsilon: float, rounds_requested: int) -> None:
+    """dp_budget.json beside rounds.jsonl: the budget, and where the run stops because of it."""
+    d = Path(metrics_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "dp_budget.json").write_text(json.dumps({
+        "max_epsilon": budget, "rounds_requested": rounds_requested,
+        "rounds_done_before": done_before, "last_round_allowed": last_round,
+        "epsilon_at_last_round_allowed": epsilon,
+        "stopped_by_budget": last_round < rounds_requested, "written": time.time(),
+    }, indent=1) + "\n")
+
+
 class CommsFedAvg(Strategy):
     """FedAvg plus FedFleet's measurements, optionally with central differential privacy.
 
@@ -82,10 +147,14 @@ class CommsFedAvg(Strategy):
             if dp["noise_multiplier"] > 0:
                 from flwr.serverapp import (NeighboringRelation, PrivacyConfig, RdpAccountant,
                                             SamplingMethod)
+                # max_epsilon is Flower's own budget: its DP wrapper raises PrivacyBudgetExhausted
+                # before a release that would pass it, and the saved ledger keeps it, so a resumed
+                # run must use the same value (Flower refuses a ledger with another config).
                 self.accountant = RdpAccountant(PrivacyConfig(
                     target_delta=float(dp["delta"]), population_size=int(dp["sites"]),
                     neighboring_relation=NeighboringRelation.ADD_OR_REMOVE_ONE,
-                    sampling_method=SamplingMethod.NO_AMPLIFICATION))
+                    sampling_method=SamplingMethod.NO_AMPLIFICATION,
+                    max_epsilon=dp.get("max_epsilon")))
                 if dp_state is not None:
                     # Resumed run: continue the privacy ledger of the rounds already released.
                     # Raises ValueError if delta or the number of sites changed since then.
@@ -174,6 +243,7 @@ class CommsFedAvg(Strategy):
                 "sites": int(self.dp["sites"]),
                 "delta": float(self.dp["delta"]),
                 "epsilon": None if spent is None else float(spent.epsilon),
+                "max_epsilon": self.dp.get("max_epsilon"),
                 "releases": None if spent is None else int(spent.num_releases),
                 "aggregated": arrays is not None,
             }

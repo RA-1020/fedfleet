@@ -211,14 +211,23 @@ class SecAggFedAvg(LegacyFedAvg):
         n, z, c = int(dp["sites"]), float(dp["noise_multiplier"]), float(dp["clip_norm"])
         released = params is not None and replies == n
         if released and z > 0:
+            from flwr.supercore.privacy_accounting import GaussianPrivacyEvent
+            event = GaussianPrivacyEvent(noise_multiplier=z, sample_size=n, population_size=n)
+            if rec.accountant.config.max_epsilon is not None and rec.accountant.would_exceed(event):
+                # Flower's own rule (DifferentialPrivacyClientSideFixedClipping): never release past
+                # max_epsilon. server_app.py stops earlier, so this is only a backstop.
+                from flwr.serverapp.exception import PrivacyBudgetExhausted
+                spent = rec.accountant.get_privacy_spent()
+                raise PrivacyBudgetExhausted("The next private release would exceed max_epsilon "
+                                             f"(current epsilon: {spent.epsilon}, delta: {spent.delta}).")
             std = z * c / n
             arrays = [a + self._rng.normal(0.0, std, a.shape) for a in parameters_to_ndarrays(params)]
             params = ndarrays_to_parameters(arrays)
-            from flwr.supercore.privacy_accounting import GaussianPrivacyEvent
-            rec.accountant.compose(GaussianPrivacyEvent(noise_multiplier=z, sample_size=n, population_size=n))
+            rec.accountant.compose(event)
         spent = rec.accountant.get_privacy_spent() if rec.accountant is not None else None
         rec._row["dp"] = {"noise_multiplier": z, "clip_norm": c, "sites": n, "delta": float(dp["delta"]),
                           "epsilon": None if spent is None else float(spent.epsilon),
+                          "max_epsilon": dp.get("max_epsilon"),
                           "releases": None if spent is None else int(spent.num_releases),
                           "aggregated": released}
         return params if released else None

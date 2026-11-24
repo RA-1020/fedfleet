@@ -164,3 +164,39 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok", name)
+
+
+def test_epsilon_budget_rules():
+    for body in ({"dp_max_epsilon": 50}, {"dp": True, "dp_noise_multiplier": 0.0, "dp_max_epsilon": 50}):
+        r = c.post("/runs", json={"name": "budget-bad", **body}, headers=KEY)
+        assert r.status_code == 422 and "unbounded" in r.json()["detail"], (body, r.text)
+    cfg = api._run_config(api.RunRequest(name="b", dp=True, dp_noise_multiplier=0.2, dp_max_epsilon=80), "/tmp/m")
+    assert "dp-max-epsilon=80.0" in cfg
+    spent = HOME / "fedfleet-runs-spent"
+    spent.mkdir()
+    (spent / "latest_checkpoint.pt").write_bytes(b"x")
+    dp = {"noise_multiplier": 0.2, "clip_norm": 1.5, "sites": 3, "delta": 1e-5, "epsilon": 77.37, "max_epsilon": 70.0}
+    (spent / "rounds.jsonl").write_text("".join(json.dumps({"round": r, "dp": dp}) + "\n" for r in (1, 2, 3)))
+    base = {"name": "spent", "rounds": 6, "resume": True, "dp": True, "dp_noise_multiplier": 0.2}
+    r = c.post("/runs", json={**base, "dp_max_epsilon": 70}, headers=KEY)
+    assert r.status_code == 409 and "budget already spent" in r.json()["detail"], r.text
+    for other in (0, 100):                                   # the run's budget cannot change
+        r = c.post("/runs", json={**base, "dp_max_epsilon": other}, headers=KEY)
+        assert r.status_code == 409 and "original dp_max_epsilon" in r.json()["detail"], (other, r.text)
+    within = HOME / "fedfleet-runs-within"
+    within.mkdir()
+    (within / "latest_checkpoint.pt").write_bytes(b"x")
+    (within / "rounds.jsonl").write_text(json.dumps({"round": 3, "dp": {**dp, "max_epsilon": 100.0}}) + "\n")
+    base = {**base, "name": "within"}
+    orig = api.subprocess.run
+    api.subprocess.run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "Successfully started run 7\n", "")
+    try:
+        r = c.post("/runs", json={**base, "dp_max_epsilon": 100}, headers=KEY)
+        assert r.status_code == 202 and r.json()["dp_max_epsilon"] == 100, r.text
+    finally:
+        api.subprocess.run = orig
+
+
+def test_dp_with_compression_refused():
+    r = c.post("/runs", json={"name": "dp-comp", "dp": True, "compression": "int8"}, headers=KEY)
+    assert r.status_code == 422 and "clipping bound" in r.json()["detail"], r.text

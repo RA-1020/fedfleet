@@ -46,10 +46,11 @@ rates-path = ""             # e.g. "~/fedfleet/deploy/rates.toml" on the aggrega
 compression = "none"        # update compression sites -> aggregator: none, int8, topk, topk-int8 (fedfleet/compress.py)
 topk-ratio = 0.1            # share of each tensor's values kept in the topk modes
 error-feedback = true       # sites carry what compression dropped into their next update
-dp = false                  # central differential privacy, client-side clipping (fedfleet/comms.py)
+dp = false                  # central differential privacy, client-side clipping (fedfleet/comms.py); not with compression
 dp-noise-multiplier = 1.0   # Gaussian noise std = multiplier x clip norm / sites; 0 = clipping only
 dp-clip-norm = 1.5          # L2 bound on each site's update (measured norms about 1.5 after round 1)
 dp-delta = 0.00001          # delta at which epsilon is reported
+dp-max-epsilon = 0.0     # > 0: stop before a round would take epsilon past this (needs dp and noise > 0); 0 = no budget
 secagg = false              # secure aggregation (SecAgg+, fedfleet/secagg.py); works with dp, not with compression
 secagg-max-weight = 60000.0 # at least the largest site's sample count (weights are num_examples / this)
 secagg-clipping-range = 8.0 # SecAgg+ clips each weighted parameter to +-this before quantising

@@ -12,7 +12,7 @@ from flwr.serverapp import Grid, ServerApp
 from flwr.app import MetricRecord
 from torch.utils.data import DataLoader, Subset
 
-from fedfleet.comms import DP_FRACTION, CommsFedAvg
+from fedfleet.comms import DP_FRACTION, CommsFedAvg, affordable_releases, ledger_max_epsilon, write_budget_note
 from fedfleet.cost import load_rates
 from fedfleet.compress import check_mode
 from fedfleet.data import public_test_set
@@ -81,6 +81,14 @@ def main(grid: Grid, context: Context) -> None:
               "sites": min_nodes, "delta": float(cfg.get("dp-delta", 1e-5))}
         print(f"[FedFleet] differential privacy: noise multiplier {dp['noise_multiplier']}, "
               f"clip norm {dp['clip_norm']}, {min_nodes} sites, equal weights, delta {dp['delta']:g}")
+    if dp is not None and compression != "none":
+        # The DP guarantee needs every site's update to stay within the clipping norm. Compression
+        # changes the update after clipping: int8 rounding can grow it, and error feedback adds
+        # what earlier rounds dropped, so the sent update can exceed the norm and epsilon would
+        # be understated. Refused, as SecAgg+ refuses compression.
+        print("[FedFleet] dp=true cannot be combined with compression (the clipping bound would not "
+              "hold for the update actually sent); not starting")
+        return
     # A resumed run keeps its privacy settings: epsilon covers every released model only if the
     # ledger continues. Refuse the combinations that would silently break that.
     noisy = dp is not None and dp["noise_multiplier"] > 0
@@ -94,6 +102,41 @@ def main(grid: Grid, context: Context) -> None:
         return
     if done_rounds and saved_dp is not None:
         print("[FedFleet] continuing the privacy ledger of the earlier rounds")
+
+    # Privacy budget: stop before a release would take epsilon past it. Every round composes
+    # the same event, so the number of rounds that fit is known now (fedfleet/comms.py).
+    budget = float(cfg.get("dp-max-epsilon", 0.0))
+    if done_rounds and saved_dp is not None:
+        # As in Flower, the budget belongs to the run: the ledger was saved with it, and a
+        # resume may neither add, raise, lower nor drop it.
+        saved_max = ledger_max_epsilon(json.loads(saved_dp))
+        if (saved_max or 0.0) != budget:
+            print(f"[FedFleet] this run's privacy ledger was saved with max_epsilon "
+                  f"{'none' if saved_max is None else f'{saved_max:g}'}; resume it with the same "
+                  f"dp-max-epsilon ({0.0 if saved_max is None else saved_max:g}). Not resuming.")
+            return
+    if budget > 0:
+        if not noisy:
+            print("[FedFleet] dp-max-epsilon needs dp=true with a noise multiplier above 0 "
+                  "(without noise epsilon is unbounded). Not starting.")
+            return
+        dp["max_epsilon"] = budget
+        ledger = json.loads(saved_dp) if saved_dp else None
+        allowed, eps_now, eps_after = affordable_releases(dp, ledger, budget, remaining)
+        if allowed == 0:
+            print(f"[FedFleet] privacy budget reached: epsilon is {eps_now:.4g} and one more round "
+                  f"would exceed the budget of {budget:g}. Not starting.")
+            write_budget_note(metrics_dir, budget, done_rounds, done_rounds, eps_now, num_rounds)
+            return
+        if allowed < remaining:
+            print(f"[FedFleet] privacy budget {budget:g} allows {allowed} of the {remaining} remaining "
+                  f"rounds: the run stops after round {done_rounds + allowed} at epsilon "
+                  f"{eps_after:.4g} (at most; a round without all sites releases nothing)")
+            remaining = allowed
+        else:
+            print(f"[FedFleet] privacy budget {budget:g}: all {remaining} remaining rounds fit "
+                  f"(epsilon at most {eps_after:.4g} at the end)")
+        write_budget_note(metrics_dir, budget, done_rounds + remaining, done_rounds, eps_after, num_rounds)
 
     # Fixed public test set, disjoint from both the sites' data and the backbone's
     # pre-training data: one consistent convergence curve whichever sites are online.

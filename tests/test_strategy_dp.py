@@ -150,3 +150,47 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok", name)
+
+
+def test_budget_counts_affordable_rounds_from_the_ledger():
+    from fedfleet.comms import affordable_releases, write_budget_note
+    dp = {"noise_multiplier": 0.2, "clip_norm": 1.5, "sites": 3, "delta": 1e-5}
+    # epsilon after 1..6 releases on the live federation: 35.08 57.30 77.37 96.12 114.19 131.69
+    assert affordable_releases(dp, None, 30.0, 6)[0] == 0
+    k, now, after = affordable_releases(dp, None, 80.0, 6)
+    assert (k, now) == (3, 0.0) and math.isclose(after, 77.366, rel_tol=1e-4)
+    assert affordable_releases(dp, None, 1e9, 6)[0] == 6                 # capped at the rounds asked for
+    # resumed after 3 rounds: the ledger counts, so a budget of 100 leaves one more round
+    noisy = {"noise_multiplier": 0.2, "clip_norm": 1.5, "sites": 3, "delta": 1e-5}
+    first = []
+    run(dp=noisy, clip=1.0, rounds=3, keep=first)
+    ledger = json.loads(first[0].dp_state_json())
+    k, now, after = affordable_releases(dp, ledger, 100.0, 3)
+    assert k == 1 and math.isclose(now, 77.366, rel_tol=1e-4) and math.isclose(after, 96.116, rel_tol=1e-4)
+    assert affordable_releases(dp, ledger, 90.0, 3)[0] == 0
+    d = Path(tempfile.mkdtemp())
+    write_budget_note(str(d), 100.0, 4, 3, after, 6)
+    note = json.loads((d / "dp_budget.json").read_text())
+    assert note["stopped_by_budget"] and note["last_round_allowed"] == 4
+
+
+def test_budget_appears_in_rows():
+    dp = {"noise_multiplier": 0.2, "clip_norm": 1.0, "sites": 3, "delta": 1e-5, "max_epsilon": 80.0}
+    _, rows, _ = run(dp=dp, clip=1.0, rounds=1)
+    assert rows[-1]["dp"]["max_epsilon"] == 80.0
+
+
+def test_flower_backstop_and_ledger_keep_max_epsilon():
+    import pytest
+    from flwr.serverapp.exception import PrivacyBudgetExhausted
+    from fedfleet.comms import ledger_max_epsilon
+    dp = {"noise_multiplier": 0.2, "clip_norm": 1.0, "sites": 3, "delta": 1e-5, "max_epsilon": 40.0}
+    keep = []
+    # without FedFleet's early stop, Flower's own check refuses round 2 (epsilon would be 57.3)
+    with pytest.raises(PrivacyBudgetExhausted):
+        run(dp=dp, clip=1.0, rounds=3, keep=keep)
+    ledger = json.loads(keep[0].dp_state_json())
+    assert ledger_max_epsilon(ledger) == 40.0 and ledger_max_epsilon(None) is None
+    # a ledger saved with one budget cannot be continued under another (Flower checks the config)
+    with pytest.raises(ValueError):
+        run(dp={**dp, "max_epsilon": 80.0}, clip=1.0, rounds=1, dp_state=ledger, offset=1)

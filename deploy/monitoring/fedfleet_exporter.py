@@ -129,6 +129,7 @@ def render(runs: list[Run]) -> str:
         metric("fedfleet_global_loss", "gauge", "Loss on the public test set", L, row.get("global_loss"))
         dp = row.get("dp") or {}
         metric("fedfleet_dp_epsilon", "gauge", "Privacy spent so far (epsilon at fedfleet_dp_delta)", L, dp.get("epsilon"))
+        metric("fedfleet_dp_max_epsilon", "gauge", "Privacy budget: the run stops before epsilon would pass it", L, dp.get("max_epsilon"))
         metric("fedfleet_dp_delta", "gauge", "Delta at which epsilon is reported", L, dp.get("delta") if dp else None)
         metric("fedfleet_dp_noise_multiplier", "gauge", "Gaussian noise multiplier", L, dp.get("noise_multiplier"))
         metric("fedfleet_dp_clip_norm", "gauge", "L2 clipping bound on each site update", L, dp.get("clip_norm"))

@@ -145,6 +145,9 @@ class RunRequest(BaseModel):
     dp_noise_multiplier: float = Field(1.0, ge=0.0, le=10.0)
     dp_clip_norm: float = Field(1.5, gt=0.0, le=100.0)
     dp_delta: float = Field(1e-5, gt=0.0, lt=1.0)
+    dp_max_epsilon: float = Field(0.0, ge=0.0, le=1e6, description="Flower's max_epsilon: > 0 stops the run "
+                                     "before a round would take epsilon past it; needs dp and noise above 0; "
+                                     "fixed for the life of a run")
     secagg: bool = Field(False, description="secure aggregation (SecAgg+); works with dp, not with compression")
     resume: bool = Field(False, description="continue fedfleet-runs-<name> from its latest_checkpoint.pt; "
                                              "rounds is then the total to reach, not the number to add")
@@ -181,6 +184,7 @@ def _run_config(req: RunRequest, metrics_dir: str) -> str:
         "error-feedback": req.error_feedback, "seed": req.seed,
         "dp": req.dp, "dp-noise-multiplier": req.dp_noise_multiplier,
         "dp-clip-norm": req.dp_clip_norm, "dp-delta": req.dp_delta,
+        "dp-max-epsilon": req.dp_max_epsilon,
         "resume": req.resume, "secagg": req.secagg,
     }
 
@@ -200,6 +204,13 @@ def start_run(req: RunRequest) -> dict:
     if req.secagg and req.compression != "none":
         raise HTTPException(422, "secagg cannot be combined with compression: SecAgg+ quantises "
                                  "updates itself, and masked values do not compress")
+    if req.dp and req.compression != "none":
+        raise HTTPException(422, "dp cannot be combined with compression: compression and error "
+                                 "feedback change the update after clipping, so the clipping bound "
+                                 "and epsilon would not hold")
+    if req.dp_max_epsilon > 0 and not (req.dp and req.dp_noise_multiplier > 0):
+        raise HTTPException(422, "dp_max_epsilon needs dp=true and dp_noise_multiplier above 0: "
+                                 "without noise epsilon is unbounded")
     metrics_dir = HOME / f"fedfleet-runs-{req.name}"
     done = None
     if req.resume:
@@ -220,6 +231,16 @@ def start_run(req: RunRequest) -> dict:
                           or abs(float(last_dp.get("delta", 0)) - req.dp_delta) > 1e-15):
             raise HTTPException(409, "resume a DP run with its original noise multiplier and delta "
                                      f"({last_dp.get('noise_multiplier')}, {last_dp.get('delta')})")
+        # As in Flower, max_epsilon belongs to the run (its saved ledger keeps it): a resume must
+        # use the run's own value, and one that has spent it cannot continue.
+        saved_max = float((last_dp or {}).get("max_epsilon") or 0.0)
+        if was_noisy and saved_max != req.dp_max_epsilon:
+            raise HTTPException(409, "resume a DP run with its original dp_max_epsilon "
+                                     f"({saved_max:g}; 0 = none)")
+        spent = (last_dp or {}).get("epsilon")
+        if req.dp_max_epsilon > 0 and spent is not None and spent >= req.dp_max_epsilon:
+            raise HTTPException(409, f"privacy budget already spent: epsilon is {spent:.4g}, "
+                                     f"max_epsilon {req.dp_max_epsilon:g}")
         if done >= req.rounds:
             raise HTTPException(409, f"fedfleet-runs-{req.name} already has {done} rounds; ask for more than that")
     elif metrics_dir.exists():
@@ -239,4 +260,4 @@ def start_run(req: RunRequest) -> dict:
         raise HTTPException(502, f"flwr run failed (exit {r.returncode}): {tail}")
     return {"run_id": m.group(1), "run": f"fedfleet-runs-{req.name}", "rounds": req.rounds,
             "min_nodes": req.min_nodes, "compression": req.compression, "dp": req.dp,
-            "resume": req.resume, "secagg": req.secagg, "rounds_done_before": done, "watch": f"/runs/fedfleet-runs-{req.name}"}
+            "dp_max_epsilon": req.dp_max_epsilon or None, "resume": req.resume, "secagg": req.secagg, "rounds_done_before": done, "watch": f"/runs/fedfleet-runs-{req.name}"}
