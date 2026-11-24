@@ -130,6 +130,34 @@ def test_resume_rules_and_command():
         api.subprocess.run = orig
 
 
+def test_secagg_settings_and_refusals():
+    for body in ({"secagg": True, "dp": True}, {"secagg": True, "compression": "int8"}):
+        r = c.post("/runs", json={"name": "sa-bad", **body}, headers=KEY)
+        assert r.status_code == 422 and "secagg" in r.json()["detail"], body
+    cfg = api._run_config(api.RunRequest(name="sa"), "/tmp/m")
+    assert "secagg=false" in cfg
+    assert "secagg=true" in api._run_config(api.RunRequest(name="sa", secagg=True), "/tmp/m")
+    # resume must keep the aggregation mode of the original run
+    folder = HOME / "fedfleet-runs-sa-run"
+    folder.mkdir()
+    (folder / "latest_checkpoint.pt").write_bytes(b"x")
+    (folder / "rounds.jsonl").write_text("".join(json.dumps({"round": r, "secagg": {"aggregated": True}}) + "\n" for r in (1, 2)))
+    r = c.post("/runs", json={"name": "sa-run", "rounds": 4, "resume": True}, headers=KEY)
+    assert r.status_code == 409 and "it ran with secagg" in r.json()["detail"]
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, "Successfully started run 7\n", "")
+    orig = api.subprocess.run
+    api.subprocess.run = fake_run
+    try:
+        r = c.post("/runs", json={"name": "sa-run", "rounds": 4, "resume": True, "secagg": True}, headers=KEY)
+        assert r.status_code == 202 and r.json()["secagg"] is True and "secagg=true" in seen["cmd"][5], r.text
+    finally:
+        api.subprocess.run = orig
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -145,14 +145,16 @@ class RunRequest(BaseModel):
     dp_noise_multiplier: float = Field(1.0, ge=0.0, le=10.0)
     dp_clip_norm: float = Field(1.5, gt=0.0, le=100.0)
     dp_delta: float = Field(1e-5, gt=0.0, lt=1.0)
+    secagg: bool = Field(False, description="secure aggregation (SecAgg+); not with dp or compression")
     resume: bool = Field(False, description="continue fedfleet-runs-<name> from its latest_checkpoint.pt; "
                                              "rounds is then the total to reach, not the number to add")
 
 
-def _done_rounds(path: Path) -> tuple[int, dict | None]:
-    """Highest round logged in a rounds.jsonl (0 if none; the checkpoint matches it) and the
-    privacy settings of that round's row (None for a run without DP)."""
-    done, dp = 0, None
+def _done_rounds(path: Path) -> tuple[int, dict | None, bool]:
+    """Highest round logged in a rounds.jsonl (0 if none; the checkpoint matches it), the
+    privacy settings of that round's row (None for a run without DP) and whether that round
+    used secure aggregation."""
+    done, dp, secagg = 0, None, False
     try:
         for line in path.read_text().splitlines():
             try:
@@ -160,10 +162,10 @@ def _done_rounds(path: Path) -> tuple[int, dict | None]:
             except json.JSONDecodeError:
                 continue
             if isinstance(row.get("round"), int) and row["round"] >= done:
-                done, dp = row["round"], row.get("dp")
+                done, dp, secagg = row["round"], row.get("dp"), "secagg" in row
     except FileNotFoundError:
         pass
-    return done, dp
+    return done, dp, secagg
 
 
 def _run_config(req: RunRequest, metrics_dir: str) -> str:
@@ -179,7 +181,7 @@ def _run_config(req: RunRequest, metrics_dir: str) -> str:
         "error-feedback": req.error_feedback, "seed": req.seed,
         "dp": req.dp, "dp-noise-multiplier": req.dp_noise_multiplier,
         "dp-clip-norm": req.dp_clip_norm, "dp-delta": req.dp_delta,
-        "resume": req.resume,
+        "resume": req.resume, "secagg": req.secagg,
     }
 
     def val(v):
@@ -195,12 +197,18 @@ def _run_config(req: RunRequest, metrics_dir: str) -> str:
 def start_run(req: RunRequest) -> dict:
     if not RUN_NAME.match(req.name):
         raise HTTPException(422, "name must be 1-40 lower-case letters, digits or hyphens")
+    if req.secagg and (req.dp or req.compression != "none"):
+        raise HTTPException(422, "secagg cannot be combined with dp or compression: SecAgg+ quantises "
+                                 "updates itself, and DP under SecAgg+ is not wired yet")
     metrics_dir = HOME / f"fedfleet-runs-{req.name}"
     done = None
     if req.resume:
         if not (metrics_dir / "latest_checkpoint.pt").is_file():
             raise HTTPException(409, f"resume needs fedfleet-runs-{req.name}/latest_checkpoint.pt on the aggregator")
-        done, last_dp = _done_rounds(metrics_dir / "rounds.jsonl")
+        done, last_dp, last_secagg = _done_rounds(metrics_dir / "rounds.jsonl")
+        if last_secagg != req.secagg:
+            raise HTTPException(409, "resume with the same aggregation as the original run: "
+                                     + ("it ran with secagg" if last_secagg else "it ran without secagg"))
         # Epsilon covers every released model only if a DP run resumes with the same privacy
         # settings (the aggregator checks the saved ledger too; this refuses early and says why).
         was_noisy = bool(last_dp) and (last_dp.get("noise_multiplier") or 0) > 0
@@ -231,4 +239,4 @@ def start_run(req: RunRequest) -> dict:
         raise HTTPException(502, f"flwr run failed (exit {r.returncode}): {tail}")
     return {"run_id": m.group(1), "run": f"fedfleet-runs-{req.name}", "rounds": req.rounds,
             "min_nodes": req.min_nodes, "compression": req.compression, "dp": req.dp,
-            "resume": req.resume, "rounds_done_before": done, "watch": f"/runs/fedfleet-runs-{req.name}"}
+            "resume": req.resume, "secagg": req.secagg, "rounds_done_before": done, "watch": f"/runs/fedfleet-runs-{req.name}"}

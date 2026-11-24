@@ -281,7 +281,8 @@ class CommsFedAvg(Strategy):
             name = f"site {s['site']}" if s["site"] is not None else f"node {s['node']}"
             n = f"{s['num_examples']:,}" if s["num_examples"] is not None else "?"
             print(f"[FedFleet]   {name}: {n} samples, setup {s['setup_seconds']} s, "
-                  f"train {s['train_seconds']} s, turnaround {s['turnaround_seconds']} s")
+                  f"train {s['train_seconds']} s, turnaround "
+                  + ("n/a" if s.get("turnaround_seconds") is None else f"{s['turnaround_seconds']} s"))
         for node in r.get("nodes_missing", []):
             print(f"[FedFleet]   no reply from node {node}")
         if "dp" in r:

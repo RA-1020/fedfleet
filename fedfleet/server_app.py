@@ -17,6 +17,7 @@ from fedfleet.cost import load_rates
 from fedfleet.compress import check_mode
 from fedfleet.data import public_test_set
 from fedfleet.model import build_model, count_params, exchanged_module
+from fedfleet.secagg import run_secagg
 from fedfleet.task import evaluate, pick_device
 
 app = ServerApp()
@@ -93,6 +94,44 @@ def main(grid: Grid, context: Context) -> None:
         return
     if done_rounds and saved_dp is not None:
         print("[FedFleet] continuing the privacy ledger of the earlier rounds")
+
+    # Fixed public test set, disjoint from both the sites' data and the backbone's
+    # pre-training data: one consistent convergence curve whichever sites are online.
+    public = public_test_set(str(cfg["data-path"]), int(cfg["num-classes"]),
+                             str(cfg["public-data-path"]))
+    public = Subset(public, range(min(len(public), 4000)))
+    public_loader = DataLoader(public, batch_size=512)
+
+    if bool(cfg.get("secagg", False)):
+        # Secure aggregation runs on Flower's legacy workflow (fedfleet/secagg.py). SecAgg+
+        # quantises updates itself, and DP under SecAgg+ is not wired yet: refuse both.
+        if dp is not None or compression != "none":
+            print("[FedFleet] secagg=true cannot be combined with dp or compression (yet); not starting")
+            return
+        if saved_dp is not None:
+            print("[FedFleet] this checkpoint comes from a DP run; resume it without secagg. Not resuming.")
+            return
+        max_weight = float(cfg.get("secagg-max-weight", 60000.0))
+        clipping_range = float(cfg.get("secagg-clipping-range", 8.0))
+        print(f"[FedFleet] secure aggregation (SecAgg+): {min_nodes} sites minimum, shares to all "
+              f"selected sites, threshold 2/3, max weight {max_weight:g}, clipping range {clipping_range:g}"
+              + ("; site evaluation off under SecAgg+" if bool(cfg["site-eval"]) else ""))
+        recorder = CommsFedAvg(metrics_dir=metrics_dir, head_only=head_only,
+                               round_offset=done_rounds, rates=rates)
+
+        def evaluate_global(server_round: int, sd: dict) -> tuple[float, float]:
+            part.load_state_dict(sd)
+            return evaluate(model, public_loader, pick_device())
+
+        final = run_secagg(grid, context, recorder=recorder, state=state, num_rounds=remaining,
+                           round_offset=done_rounds, min_nodes=min_nodes,
+                           fraction_train=float(cfg["fraction-train"]),
+                           timeout=float(cfg["round-timeout"]), evaluate_global=evaluate_global,
+                           max_weight=max_weight, clipping_range=clipping_range)
+        torch.save(final, Path(metrics_dir) / "final_exchanged.pt")
+        print(f"[FedFleet] done; metrics in {metrics_dir}/rounds.jsonl")
+        return
+
     strategy = CommsFedAvg(
         metrics_dir=metrics_dir,
         head_only=head_only,
@@ -110,13 +149,6 @@ def main(grid: Grid, context: Context) -> None:
         min_evaluate_nodes=min_nodes,
         min_available_nodes=min_nodes,
     )
-    # Fixed public test set, disjoint from both the sites' data and the backbone's
-    # pre-training data: one consistent convergence curve whichever sites are online.
-    public = public_test_set(str(cfg["data-path"]), int(cfg["num-classes"]),
-                             str(cfg["public-data-path"]))
-    public = Subset(public, range(min(len(public), 4000)))
-    public_loader = DataLoader(public, batch_size=512)
-
     def global_eval(server_round: int, arrays: ArrayRecord) -> MetricRecord:
         part.load_state_dict(arrays.to_torch_state_dict())
         loss, acc = evaluate(model, public_loader, pick_device())
