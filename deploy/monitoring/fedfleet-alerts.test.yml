@@ -1,0 +1,81 @@
+# promtool test rules deploy/monitoring/fedfleet-alerts.test.yml   (from the repository root)
+rule_files: [fedfleet-alerts.yml]
+evaluation_interval: 15s
+tests:
+  - interval: 15s
+    input_series:
+      # superlink stops at minute 1; control API stays up
+      - series: 'fedfleet_service_up{service="fedfleet-superlink"}'
+        values: '1x4 0x12'
+      - series: 'fedfleet_service_up{service="fedfleet-control-api"}'
+        values: '1x16'
+      - series: 'up{job="fedfleet"}'
+        values: '1x16'
+    alert_rule_test:
+      - eval_time: 1m30s
+        alertname: FedFleetServiceDown
+        exp_alerts: []                       # down for 30 s only
+      - eval_time: 3m
+        alertname: FedFleetServiceDown
+        exp_alerts:
+          - exp_labels: {severity: critical, service: fedfleet-superlink}
+            exp_annotations:
+              summary: "fedfleet-superlink is not running on the aggregator"
+              description: "systemd reports fedfleet-superlink inactive for over a minute. The SuperLink and control API restart by themselves; if this stays, check journalctl -u fedfleet-superlink."
+      - eval_time: 3m
+        alertname: FedFleetExporterDown
+        exp_alerts: []
+
+  # A run's latest round was written at t=0 (timestamp 0). Active until 10 minutes later.
+  - interval: 1m
+    input_series:
+      - series: 'fedfleet_round_timestamp_seconds{run="live"}'
+        values: '0x20'
+      - series: 'fedfleet_nodes_asked{run="live"}'
+        values: '3x20'
+      - series: 'fedfleet_nodes_replied{run="live"}'
+        values: '0x20'                       # a halted SecAgg+ round
+      - series: 'fedfleet_dp_epsilon{run="live"}'
+        values: '96.12x20'
+      - series: 'fedfleet_dp_max_epsilon{run="live"}'
+        values: '100x20'
+      - series: 'fedfleet_round_seconds{run="live"}'
+        values: '81.5x20'
+      - series: 'fedfleet_round_cost_usd{run="live", side="provider"}'
+        values: '0.0011x20'
+      # a run without a budget and with all sites: none of its series may fire
+      - series: 'fedfleet_round_timestamp_seconds{run="plain"}'
+        values: '0x20'
+      - series: 'fedfleet_nodes_asked{run="plain"}'
+        values: '3x20'
+      - series: 'fedfleet_nodes_replied{run="plain"}'
+        values: '3x20'
+      - series: 'fedfleet_dp_epsilon{run="plain"}'
+        values: '96.12x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: FedFleetSiteMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, run: live}
+            exp_annotations:
+              summary: "Run live: only 0 site(s) replied in the latest round"
+              description: "A site that was asked did not reply. Under SecAgg+ the whole round is lost (0 replies). Check the sites' logs and the tailnet."
+      - eval_time: 5m
+        alertname: FedFleetPrivacyBudgetNearlySpent
+        exp_alerts:
+          - exp_labels: {severity: warning, run: live}
+            exp_annotations:
+              summary: "Run live has spent 96.12% of its privacy budget"
+              description: "Epsilon is above 80% of max_epsilon. The run stops by itself before it would pass the budget; a resume will be refused."
+      - eval_time: 5m
+        alertname: FedFleetRoundSlow
+        exp_alerts: []                       # 81.5 s is below the 120 s threshold
+      - eval_time: 5m
+        alertname: FedFleetRoundCostHigh
+        exp_alerts: []
+      - eval_time: 12m                       # 10 minutes after the last round: run inactive
+        alertname: FedFleetSiteMissing
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: FedFleetPrivacyBudgetNearlySpent
+        exp_alerts: []

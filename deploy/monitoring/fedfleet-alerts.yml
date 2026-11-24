@@ -1,0 +1,64 @@
+# Prometheus alerting rules for FedFleet: /etc/prometheus/fedfleet-alerts.yml on the aggregator,
+# loaded by rule_files in prometheus.yml. Firing alerts show in Prometheus (Alerts page) and in
+# Grafana (Alerting > Alert rules, data-source rules). Nothing sends notifications yet: no
+# Alertmanager is installed.
+#
+# A run counts as active for 10 minutes after its latest round was written. The run gauges keep
+# the last round of every finished run, so the run alerts only look at active runs; otherwise a
+# run that ended near its budget or with a missing site would keep firing for ever.
+# Tests: promtool test rules deploy/monitoring/fedfleet-alerts.test.yml
+groups:
+  - name: fedfleet
+    interval: 15s
+    rules:
+      - alert: FedFleetServiceDown
+        expr: fedfleet_service_up == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.service }} is not running on the aggregator"
+          description: "systemd reports {{ $labels.service }} inactive for over a minute. The SuperLink and control API restart by themselves; if this stays, check journalctl -u {{ $labels.service }}."
+
+      - alert: FedFleetExporterDown
+        expr: up{job="fedfleet"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "Prometheus cannot scrape the FedFleet exporter"
+          description: "No metrics for over a minute, so no other FedFleet alert can fire. Check systemctl status fedfleet-exporter."
+
+      - alert: FedFleetSiteMissing
+        expr: |
+          (fedfleet_nodes_replied < fedfleet_nodes_asked)
+          and on(run) (time() - fedfleet_round_timestamp_seconds < 600)
+        labels: {severity: warning}
+        annotations:
+          summary: "Run {{ $labels.run }}: only {{ $value }} site(s) replied in the latest round"
+          description: "A site that was asked did not reply. Under SecAgg+ the whole round is lost (0 replies). Check the sites' logs and the tailnet."
+
+      - alert: FedFleetPrivacyBudgetNearlySpent
+        expr: |
+          (fedfleet_dp_epsilon / fedfleet_dp_max_epsilon > 0.8)
+          and on(run) (time() - fedfleet_round_timestamp_seconds < 600)
+        labels: {severity: warning}
+        annotations:
+          summary: "Run {{ $labels.run }} has spent {{ $value | humanizePercentage }} of its privacy budget"
+          description: "Epsilon is above 80% of max_epsilon. The run stops by itself before it would pass the budget; a resume will be refused."
+
+      - alert: FedFleetRoundSlow
+        expr: |
+          (fedfleet_round_seconds > 120)
+          and on(run) (time() - fedfleet_round_timestamp_seconds < 600)
+        labels: {severity: warning}
+        annotations:
+          summary: "Run {{ $labels.run }}: the latest round took {{ $value | humanizeDuration }}"
+          description: "Rounds normally take 15-60 s (SecAgg+ about 40 s; a halted SecAgg+ round about 80 s). A slow site or a path through a relay is the usual cause."
+
+      - alert: FedFleetRoundCostHigh
+        expr: |
+          (fedfleet_round_cost_usd{side="provider"} > 0.005)
+          and on(run) (time() - fedfleet_round_timestamp_seconds < 600)
+        labels: {severity: warning}
+        annotations:
+          summary: "Run {{ $labels.run }}: the latest round cost ${{ $value }} at list prices"
+          description: "Measured rounds cost about $0.001 (SecAgg+ about $0.0011). Above $0.005 a round is several times longer or larger than usual."

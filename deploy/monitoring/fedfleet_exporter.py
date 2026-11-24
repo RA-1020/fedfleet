@@ -16,6 +16,7 @@ import argparse
 import glob
 import json
 import os
+import subprocess
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -161,6 +162,27 @@ def run_name(path: Path) -> str:
         return path.parent.name
 
 
+# Services on the aggregator whose state the alerts watch (fedfleet-alerts.yml).
+SERVICES = ("fedfleet-superlink", "fedfleet-control-api", "fedfleet-backup", "cloudflared", "grafana-server")
+
+
+def services_text(services=SERVICES, run=subprocess.run) -> str:
+    """fedfleet_service_up{service} = 1 if systemd reports the unit active, else 0.
+
+    `systemctl is-active` needs no privileges. If systemctl itself cannot run (not a systemd
+    host, as in tests), nothing is reported rather than a false 0."""
+    lines = []
+    for svc in services:
+        try:
+            r = run(["systemctl", "is-active", svc], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        lines.append(f'fedfleet_service_up{{service="{_esc(svc)}"}} {1.0 if r.stdout.strip() == "active" else 0.0!r}')
+    head = ["# HELP fedfleet_service_up 1 if the systemd unit is active on the aggregator, else 0",
+            "# TYPE fedfleet_service_up gauge"]
+    return "\n".join(head + lines) + "\n"
+
+
 class Collector:
     def __init__(self, patterns: list[str], rates: dict | None):
         self.patterns, self.rates = patterns, rates
@@ -177,7 +199,7 @@ class Collector:
                         self.runs[key] = Run(path, run_name(path))
             for r in self.runs.values():
                 r.poll(self.rates)
-            return render(list(self.runs.values()))
+            return render(list(self.runs.values())) + services_text()
 
 
 def main() -> None:

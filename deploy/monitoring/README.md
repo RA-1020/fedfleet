@@ -18,3 +18,12 @@ before free tiers and credits), per-site training and turnaround times, resumes,
 Files: `fedfleet-exporter.service`, `prometheus.yml`, `grafana-datasource.yaml`,
 `grafana-dashboards.yaml`, `fedfleet-dashboard.json`. Installation steps are run one at a time
 with the aggregator idle; they are recorded in the project plan as they are done.
+
+## Alerts
+
+`fedfleet-alerts.yml` holds six Prometheus alerting rules: a FedFleet service down
+(`fedfleet_service_up`, from `systemctl is-active` in the exporter), the exporter itself down,
+a site missing from an active run's latest round, an active run above 80% of its privacy budget,
+a round over 120 s, and a round over $0.005 at list prices. A run is active for 10 minutes after
+its latest round. Alerts appear in Prometheus (Alerts) and in Grafana (Alerting); no
+notifications are sent yet. Tests: `promtool test rules fedfleet-alerts.test.yml` in this folder.
