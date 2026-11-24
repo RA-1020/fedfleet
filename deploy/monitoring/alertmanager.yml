@@ -1,0 +1,21 @@
+# /etc/prometheus/alertmanager.yml on the aggregator (Ubuntu package prometheus-alertmanager).
+# Sends FedFleet's alerts (fedfleet-alerts.yml) to one Telegram chat. CHAT_ID is replaced when
+# installed; the bot token is read from a file readable only by root and the prometheus group,
+# never written here.
+route:
+  receiver: telegram
+  group_by: [alertname, run, service]
+  group_wait: 30s          # gather alerts that fire together into one message
+  group_interval: 5m
+  repeat_interval: 4h      # remind while an alert keeps firing
+receivers:
+  - name: telegram
+    telegram_configs:
+      - bot_token_file: /etc/prometheus/telegram-token
+        chat_id: CHAT_ID
+        send_resolved: true
+        parse_mode: ""     # plain text: run names contain characters Markdown would mangle
+        message: |-
+          {{ if eq .Status "firing" }}FIRING{{ else }}RESOLVED{{ end }}: {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})
+          {{ range .Alerts }}- {{ .Annotations.summary }}
+          {{ end }}

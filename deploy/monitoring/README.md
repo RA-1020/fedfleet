@@ -25,5 +25,13 @@ with the aggregator idle; they are recorded in the project plan as they are done
 (`fedfleet_service_up`, from `systemctl is-active` in the exporter), the exporter itself down,
 a site missing from an active run's latest round, an active run above 80% of its privacy budget,
 a round over 120 s, and a round over $0.005 at list prices. A run is active for 10 minutes after
-its latest round. Alerts appear in Prometheus (Alerts) and in Grafana (Alerting); no
-notifications are sent yet. Tests: `promtool test rules fedfleet-alerts.test.yml` in this folder.
+its latest round. Alerts appear in Prometheus (Alerts) and in Grafana (Alerting), and Alertmanager
+(`alertmanager.yml`, listening on 127.0.0.1 only) sends them to a Telegram chat. Tests: `promtool test rules fedfleet-alerts.test.yml` in this folder.
+
+## Service-level objectives
+
+`python3 scripts/slo_report.py` on the aggregator measures the round-level objectives from every
+run's rounds.jsonl: 95% of plain rounds within 60 s, 95% of SecAgg+ rounds within 90 s, 99% of
+rounds complete outside fault-injection runs, and no DP round past its max_epsilon. The recovery
+objectives (aggregator serving again within 30 s of a crash, first new round within 120 s, a
+partitioned site back within 30 s of the heal) are measured by the chaos drills.
