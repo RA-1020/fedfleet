@@ -241,7 +241,8 @@ class SecAggFedAvg(LegacyFedAvg):
                 "site": None if m.get("site") is None else int(m["site"]),
                 "node": node,
                 # Under DP every site reports weight 1 to SecAgg+; its sample count is a metric.
-                "num_examples": int(m["samples"]) if m.get("samples") is not None else int(fr.num_examples),
+                # Sites keep their sample count, loss and update norm to themselves under SecAgg+.
+                "num_examples": int(m["samples"]) if m.get("samples") is not None else None,
                 "train_loss": m.get("train_loss"),
                 "setup_seconds": None if m.get("setup_seconds") is None else round(float(m["setup_seconds"]), 3),
                 "train_seconds": None if m.get("train_seconds") is None else round(float(m["train_seconds"]), 3),

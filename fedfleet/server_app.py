@@ -188,7 +188,9 @@ def main(grid: Grid, context: Context) -> None:
         # fixed sample size, and FedAvg samples max(int(online * fraction), min_train_nodes).
         # A fraction of exactly 0 would make FedAvg skip training, so use a tiny one.
         fraction_train=DP_FRACTION if dp else float(cfg["fraction-train"]),
-        fraction_evaluate=1.0 if bool(cfg["site-eval"]) else 0.0,
+        # Sites' own evaluation reports per-site accuracy and test-set size in clear text; under
+        # DP that is side information about a site, so it is off (the public test set remains).
+        fraction_evaluate=1.0 if (bool(cfg["site-eval"]) and dp is None) else 0.0,
         min_train_nodes=min_nodes,
         min_evaluate_nodes=min_nodes,
         min_available_nodes=min_nodes,

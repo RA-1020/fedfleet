@@ -86,3 +86,23 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok", name)
+
+
+def test_secagg_switch_hides_clear_text_sample_count(monkeypatch):
+    """Flower's secaggplus_mod returns the site's FitRes (with num_examples in clear text) beside
+    the masked vector; the switch replaces that copy with 1 (the real weight is inside the mask)."""
+    from flwr.app import ConfigRecord, Message, MetricRecord, RecordDict
+    from flwr.common.secure_aggregation.secaggplus_constants import RECORD_KEY_CONFIGS
+    import fedfleet.client_app as ca
+
+    def fake_mod(msg, context, call_next):
+        out = RecordDict({"fitres.num_examples": MetricRecord({"num_examples": 1895}),
+                          "fitres.metrics": ConfigRecord({"site": 0})})
+        return Message(out, reply_to=msg)
+
+    monkeypatch.setattr(ca, "secaggplus_mod", fake_mod)
+    msg = Message(RecordDict({RECORD_KEY_CONFIGS: ConfigRecord({"stage": "collect_masked_vectors"})}),
+                  dst_node_id=1, message_type="train")
+    out = ca.secagg_switch(msg, None, lambda m, c: None)
+    assert out.content.metric_records["fitres.num_examples"]["num_examples"] == 1
+    assert ca.PRIVATE_METRICS == ("train_loss", "update_norm", "num-examples")

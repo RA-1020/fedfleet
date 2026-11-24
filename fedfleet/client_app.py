@@ -23,6 +23,8 @@ from fedfleet.model import build_model, exchanged_module
 from fedfleet.task import evaluate, pick_device, train
 
 app = ClientApp()
+# Per-site metrics that describe the site's data or update; not sent under DP or SecAgg+.
+PRIVATE_METRICS = ("train_loss", "update_norm", "num-examples")
 torch.set_num_threads(2)
 
 
@@ -102,16 +104,17 @@ def _secagg_train(msg: Message, context: Context) -> Message:
                        for t, r in zip(trained, received, strict=True)]
             clipped = True
     samples = len(trainloader.dataset)
+    # Only what describes the round, not this site's data or model: under SecAgg+ the
+    # aggregator must not learn anything about one site's contribution, and metrics travel
+    # unmasked. Loss, update norm and sample count therefore stay here (PRIVATE_METRICS).
     metrics = {
-        "train_loss": float(loss),
         "train_seconds": time.perf_counter() - t0,
         "setup_seconds": setup_seconds,
         "site": int(context.node_config["partition-id"]),
-        "update_norm": norm,
-        "samples": samples,
         "clipped": int(clipped),
     }
-    # The weight SecAgg+ applies: the sample count, or 1 for every site under DP (equal weights).
+    # The weight SecAgg+ applies inside the masked vector: the sample count, or 1 for every site
+    # under DP (equal weights). secagg_switch hides the clear-text copy Flower sends with it.
     fitres = FitRes(Status(Code.OK, "ok"), ndarrays_to_parameters(trained), 1 if dp else samples, metrics)
     return Message(compat.fitres_to_recorddict(fitres, keep_input=True), reply_to=msg)
 
@@ -123,7 +126,15 @@ def secagg_switch(msg: Message, context: Context, call_next) -> Message:
     with the protocol's config record; only the masked-vector stage trains (_secagg_train).
     """
     if RECORD_KEY_CONFIGS in msg.content.config_records:
-        return secaggplus_mod(msg, context, _secagg_train)
+        out = secaggplus_mod(msg, context, _secagg_train)
+        # Flower 1.38 returns the masked-vector stage's reply with the site's FitRes beside the
+        # masked vector, including num_examples in clear text. The weight is already inside
+        # the masked vector, and the aggregate does not depend on this copy (every site's
+        # FitRes gets the same unmasked parameters), so send 1 instead of the sample count.
+        rec = out.content.metric_records.get("fitres.num_examples")
+        if rec is not None and "num_examples" in rec:
+            rec["num_examples"] = 1
+        return out
     return call_next(msg, context)
 
 
@@ -146,7 +157,8 @@ def train_fn(msg: Message, context: Context) -> Message:
         clip = msg.content["config"].get("clipping_norm", cfg["dp-clip-norm"])
         trained, clipped = clip_update(trained, msg.content["arrays"], float(clip))
     arrays, meta, residual_present = _compress_reply(trained, msg.content["arrays"], cfg, context)
-    metrics = MetricRecord({
+    private = bool(cfg.get("dp", False))
+    metrics = {
         "train_loss": loss,
         "train_seconds": time.perf_counter() - t0,
         "setup_seconds": setup_seconds,
@@ -164,8 +176,13 @@ def train_fn(msg: Message, context: Context) -> Message:
         "clipped": int(clipped),
         # Equal weight for every site; FedAvg uses it only when DP is on (see comms.py).
         "dp-weight": 1.0,
-    })
-    content = {"arrays": arrays, "metrics": metrics}
+    }
+    if private:
+        # The DP guarantee covers the released model, not side information: keep this site's
+        # loss, update norm and sample count here (as under SecAgg+).
+        for key in PRIVATE_METRICS:
+            metrics.pop(key, None)
+    content = {"arrays": arrays, "metrics": MetricRecord(metrics)}
     if meta is not None:
         content["compress"] = meta
     return Message(RecordDict(content), reply_to=msg)
