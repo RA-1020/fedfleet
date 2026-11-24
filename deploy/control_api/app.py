@@ -153,6 +153,50 @@ class RunRequest(BaseModel):
                                              "rounds is then the total to reach, not the number to add")
 
 
+ACTIVE = ("pending", "starting", "running")
+
+
+def _flwr_json(*args: str) -> dict:
+    """Run `flwr <args> <connection> --format json` on this machine and parse its output."""
+    cmd = [str(DIR / ".venv" / "bin" / "flwr"), *args, CONNECTION, "--format", "json"]
+    r = subprocess.run(cmd, cwd=Path.home(), capture_output=True, text=True, timeout=30)
+    return json.loads(r.stdout)
+
+
+def _online_sites() -> int:
+    """Sites the aggregator lists as online (current heartbeat)."""
+    nodes = _flwr_json("supernode", "ls").get("nodes", [])
+    return sum(1 for n in nodes if n.get("status") == "online")
+
+
+def _run_active(run_id: str) -> bool:
+    """Whether Flower still lists this run as pending, starting or running."""
+    runs = _flwr_json("ls", "--run-id", str(run_id)).get("runs", [])
+    return any(str(r.get("status", "")).split(":")[0] in ACTIVE for r in runs)
+
+
+def _next_release_exceeds(last_dp: dict, max_epsilon: float) -> tuple[bool, float]:
+    """Whether one more DP round would take epsilon past max_epsilon.
+
+    Every FedFleet release composes the same Gaussian event, so the ledger is rebuilt from the
+    last row's settings and release count with Flower's own accountant, the check its DP
+    wrapper and FedFleet's aggregator apply. Returns (exceeds, epsilon so far)."""
+    from flwr.serverapp import NeighboringRelation, PrivacyConfig, RdpAccountant, SamplingMethod
+    from flwr.supercore.privacy_accounting import GaussianPrivacyEvent
+    n = int(last_dp["sites"])
+    acc = RdpAccountant(PrivacyConfig(
+        target_delta=float(last_dp["delta"]), population_size=n,
+        neighboring_relation=NeighboringRelation.ADD_OR_REMOVE_ONE,
+        sampling_method=SamplingMethod.NO_AMPLIFICATION))
+    event = GaussianPrivacyEvent(noise_multiplier=float(last_dp["noise_multiplier"]),
+                                 sample_size=n, population_size=n)
+    releases = int(last_dp.get("releases") or 0)
+    if releases:
+        acc.compose(event, releases)
+    spent = float(last_dp.get("epsilon") or 0.0)
+    return acc.would_exceed(event, max_epsilon=max_epsilon), spent
+
+
 def _done_rounds(path: Path) -> tuple[int, dict | None, bool]:
     """Highest round logged in a rounds.jsonl (0 if none; the checkpoint matches it), the
     privacy settings of that round's row (None for a run without DP) and whether that round
@@ -237,14 +281,32 @@ def start_run(req: RunRequest) -> dict:
         if was_noisy and saved_max != req.dp_max_epsilon:
             raise HTTPException(409, "resume a DP run with its original dp_max_epsilon "
                                      f"({saved_max:g}; 0 = none)")
-        spent = (last_dp or {}).get("epsilon")
-        if req.dp_max_epsilon > 0 and spent is not None and spent >= req.dp_max_epsilon:
-            raise HTTPException(409, f"privacy budget already spent: epsilon is {spent:.4g}, "
-                                     f"max_epsilon {req.dp_max_epsilon:g}")
+        if req.dp_max_epsilon > 0 and was_noisy:
+            exceeds, spent = _next_release_exceeds(last_dp, req.dp_max_epsilon)
+            if exceeds:
+                raise HTTPException(409, f"privacy budget already spent: epsilon is {spent:.4g}, and one "
+                                         f"more round would pass max_epsilon {req.dp_max_epsilon:g}")
+        marker = metrics_dir / "active_run.json"
+        if marker.is_file():
+            try:
+                prev = json.loads(marker.read_text()).get("run_id")
+                busy = bool(prev) and _run_active(prev)
+            except Exception:
+                raise HTTPException(503, "could not check whether this run is still in progress (flwr ls)")
+            if busy:
+                raise HTTPException(409, f"run {prev} is still in progress in fedfleet-runs-{req.name}; "
+                                         "wait for it to finish or stop it first")
         if done >= req.rounds:
             raise HTTPException(409, f"fedfleet-runs-{req.name} already has {done} rounds; ask for more than that")
     elif metrics_dir.exists():
         raise HTTPException(409, f"run folder fedfleet-runs-{req.name} already exists; pick a new name")
+    try:
+        online = _online_sites()
+    except Exception:
+        raise HTTPException(503, "could not read the list of sites from the aggregator (flwr supernode ls)")
+    if online < req.min_nodes:
+        raise HTTPException(409, f"only {online} site(s) online, and this run needs {req.min_nodes}; "
+                                 "start the sites first")
     cmd = [str(DIR / ".venv" / "bin" / "flwr"), "run", str(DIR), CONNECTION,
            "--run-config", _run_config(req, f"~/fedfleet-runs-{req.name}")]
     env = {**os.environ, "FLWR_DISABLE_RUNTIME_DEPENDENCY_INSTALLATION": "1",
@@ -258,6 +320,9 @@ def start_run(req: RunRequest) -> dict:
     if r.returncode != 0 or not m:
         tail = "\n".join(text.strip().splitlines()[-5:])
         raise HTTPException(502, f"flwr run failed (exit {r.returncode}): {tail}")
+    # Remember which run uses this folder, so a resume cannot start while it is still going.
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    (metrics_dir / "active_run.json").write_text(json.dumps({"run_id": m.group(1), "resume": req.resume}) + "\n")
     return {"run_id": m.group(1), "run": f"fedfleet-runs-{req.name}", "rounds": req.rounds,
             "min_nodes": req.min_nodes, "compression": req.compression, "dp": req.dp,
             "dp_max_epsilon": req.dp_max_epsilon or None, "resume": req.resume, "secagg": req.secagg, "rounds_done_before": done, "watch": f"/runs/fedfleet-runs-{req.name}"}

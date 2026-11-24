@@ -24,6 +24,9 @@ import app as api  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 c = TestClient(api.app)
+# No aggregator in tests: three sites online and no run in progress, unless a test says otherwise.
+api._online_sites = lambda: 3
+api._run_active = lambda run_id: False
 KEY = {"X-FedFleet-Origin-Key": "test-origin-key"}
 
 
@@ -175,7 +178,7 @@ def test_epsilon_budget_rules():
     spent = HOME / "fedfleet-runs-spent"
     spent.mkdir()
     (spent / "latest_checkpoint.pt").write_bytes(b"x")
-    dp = {"noise_multiplier": 0.2, "clip_norm": 1.5, "sites": 3, "delta": 1e-5, "epsilon": 77.37, "max_epsilon": 70.0}
+    dp = {"noise_multiplier": 0.2, "clip_norm": 1.5, "sites": 3, "delta": 1e-5, "epsilon": 77.37, "releases": 3, "max_epsilon": 70.0}
     (spent / "rounds.jsonl").write_text("".join(json.dumps({"round": r, "dp": dp}) + "\n" for r in (1, 2, 3)))
     base = {"name": "spent", "rounds": 6, "resume": True, "dp": True, "dp_noise_multiplier": 0.2}
     r = c.post("/runs", json={**base, "dp_max_epsilon": 70}, headers=KEY)
@@ -200,3 +203,45 @@ def test_epsilon_budget_rules():
 def test_dp_with_compression_refused():
     r = c.post("/runs", json={"name": "dp-comp", "dp": True, "compression": "int8"}, headers=KEY)
     assert r.status_code == 422 and "clipping bound" in r.json()["detail"], r.text
+
+
+def test_resume_refused_when_next_round_passes_the_budget():
+    # the live case of 24 Nov: 4 releases at z 0.2 (epsilon 96.12), max_epsilon 100, a 5th would be 114.19
+    d = HOME / "fedfleet-runs-at-limit"
+    d.mkdir()
+    (d / "latest_checkpoint.pt").write_bytes(b"x")
+    dp = {"noise_multiplier": 0.2, "clip_norm": 1.5, "sites": 3, "delta": 1e-5, "epsilon": 96.12,
+          "releases": 4, "max_epsilon": 100.0}
+    (d / "rounds.jsonl").write_text("".join(json.dumps({"round": r, "dp": dp}) + "\n" for r in (1, 2, 3, 4)))
+    r = c.post("/runs", json={"name": "at-limit", "rounds": 6, "resume": True, "dp": True,
+                              "dp_noise_multiplier": 0.2, "dp_max_epsilon": 100}, headers=KEY)
+    assert r.status_code == 409 and "one more round would pass" in r.json()["detail"], r.text
+
+
+def test_busy_run_and_too_few_sites_refused():
+    d = HOME / "fedfleet-runs-busy"
+    d.mkdir()
+    (d / "latest_checkpoint.pt").write_bytes(b"x")
+    (d / "rounds.jsonl").write_text(json.dumps({"round": 1}) + "\n")
+    (d / "active_run.json").write_text(json.dumps({"run_id": "99"}))
+    api._run_active = lambda run_id: run_id == "99"
+    try:
+        r = c.post("/runs", json={"name": "busy", "rounds": 4, "resume": True}, headers=KEY)
+        assert r.status_code == 409 and "still in progress" in r.json()["detail"], r.text
+    finally:
+        api._run_active = lambda run_id: False
+    api._online_sites = lambda: 2
+    try:
+        r = c.post("/runs", json={"name": "needs-three", "min_nodes": 3}, headers=KEY)
+        assert r.status_code == 409 and "only 2 site(s) online" in r.json()["detail"], r.text
+        assert not (HOME / "fedfleet-runs-needs-three").exists()
+    finally:
+        api._online_sites = lambda: 3
+    orig = api.subprocess.run
+    api.subprocess.run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "Successfully started run 55\n", "")
+    try:
+        r = c.post("/runs", json={"name": "marked"}, headers=KEY)
+        assert r.status_code == 202, r.text
+        assert json.loads((HOME / "fedfleet-runs-marked" / "active_run.json").read_text())["run_id"] == "55"
+    finally:
+        api.subprocess.run = orig
