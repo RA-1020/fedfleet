@@ -6,6 +6,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 i="${SITE_ID:?}"; total="${SITE_TOTAL:?}"; agg="${SITE_AGG:-fedfleet-agg}"
 export FLWR_DISABLE_RUNTIME_DEPENDENCY_INSTALLATION=1 FLWR_HOME="$HOME/.flwr-sites/site-$i"
+# flower-supernode starts flower-superexec by name, so the venv's bin must be on PATH (cloud_up.sh
+# gets this from activating the venv; under systemd nothing else provides it).
+export PATH="$PWD/.venv/bin:$PATH"
 # shellcheck source=scripts/_site_security.sh
 source scripts/_site_security.sh
 # Wait for Tailscale to resolve the aggregator after boot (up to 2 min).
