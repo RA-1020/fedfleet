@@ -14,7 +14,8 @@ status=0
 
 echo "== stopping site 2 on $SITE_HOST"
 if nc -z -w 5 "$SITE_HOST" 22 2>/dev/null; then
-  ssh -o ConnectTimeout=20 "$SITE_USER@$SITE_HOST" "cd ~/fedfleet && scripts/stop_local.sh" || status=1
+  ssh -o ConnectTimeout=20 "$SITE_USER@$SITE_HOST" \
+    "if systemctl cat fedfleet-site >/dev/null 2>&1; then sudo systemctl stop fedfleet-site && echo stopped; else cd ~/fedfleet && scripts/stop_local.sh; fi" || status=1
 else
   echo "   not reachable (VM already stopped?), skipping"
 fi

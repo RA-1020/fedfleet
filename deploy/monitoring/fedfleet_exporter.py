@@ -164,7 +164,33 @@ def run_name(path: Path) -> str:
 
 # Services on the aggregator whose state the alerts watch (fedfleet-alerts.yml).
 SERVICES = ("fedfleet-superlink", "fedfleet-control-api", "fedfleet-backup", "cloudflared", "grafana-server",
-            "fedfleet-watchdog.timer")   # a timer is "active" while it is scheduled
+            "fedfleet-watchdog.timer", "fedfleet-elastic")   # a timer is "active" while it is scheduled
+ELASTIC_STATE = Path.home() / "fedfleet-elastic" / "state.json"
+
+
+def elastic_text(path: Path = ELASTIC_STATE) -> str:
+    """Gauges from the elasticity controller's state (deploy/elastic); nothing if it is absent."""
+    try:
+        st = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return ""
+    vals = [
+        ("fedfleet_elastic_vm_up", "1 if the Azure site VM is running or starting, else 0",
+         1.0 if st.get("vm_power") in ("running", "starting") else 0.0),
+        ("fedfleet_elastic_started_by_controller", "1 if the controller started the VM (and will stop it)",
+         1.0 if st.get("started_by_controller") else 0.0),
+        ("fedfleet_elastic_queue_length", "runs waiting for sites", float(st.get("queue_length") or 0)),
+        ("fedfleet_elastic_vm_minutes_today", "minutes the VM has run in the current UTC day",
+         float(st.get("vm_minutes_today") or 0)),
+        ("fedfleet_elastic_budget_minutes_per_day", "the controller's daily VM budget in minutes",
+         float(st.get("budget_minutes_per_day") or 0)),
+        ("fedfleet_elastic_vm_cost_today_usd", "VM minutes today at the B2s list price",
+         float(st.get("vm_cost_today") or 0)),
+    ]
+    out = []
+    for name, help_, v in vals:
+        out += [f"# HELP {name} {help_}", f"# TYPE {name} gauge", f"{name} {v!r}"]
+    return "\n".join(out) + "\n"
 
 
 def services_text(services=SERVICES, run=subprocess.run) -> str:
@@ -200,7 +226,7 @@ class Collector:
                         self.runs[key] = Run(path, run_name(path))
             for r in self.runs.values():
                 r.poll(self.rates)
-            return render(list(self.runs.values())) + services_text()
+            return render(list(self.runs.values())) + services_text() + elastic_text()
 
 
 def main() -> None:

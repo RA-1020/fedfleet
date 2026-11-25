@@ -1,0 +1,15 @@
+{
+  "Name": "FedFleet VM power",
+  "IsCustom": true,
+  "Description": "Read, start and deallocate one VM; nothing else. Used by the FedFleet elasticity controller.",
+  "Actions": [
+    "Microsoft.Compute/virtualMachines/read",
+    "Microsoft.Compute/virtualMachines/instanceView/read",
+    "Microsoft.Compute/virtualMachines/start/action",
+    "Microsoft.Compute/virtualMachines/deallocate/action"
+  ],
+  "NotActions": [],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": ["/subscriptions/SUBSCRIPTION_ID/resourceGroups/fedfleet-rg"]
+}

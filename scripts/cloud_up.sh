@@ -73,11 +73,20 @@ if grep -q "(insecure" <<<"$out"; then
 fi
 
 echo "== starting site 2 on $SITE_HOST"
+# With deploy/site/fedfleet-site.service installed (needed for elasticity) the site is a
+# service that starts at boot; otherwise it is started by hand as before.
+# shellcheck disable=SC2029  # AGG expands here on purpose
 ssh -o ConnectTimeout=20 "$SITE_USER@$SITE_HOST" \
-  "cd ~/fedfleet && scripts/stop_local.sh >/dev/null; . .venv/bin/activate && scripts/run_sites.sh $AGG 1 3 2"
+  "if systemctl cat fedfleet-site >/dev/null 2>&1; then sudo systemctl restart fedfleet-site && echo 'site 2 of 3 restarted (service fedfleet-site, log: journalctl -u fedfleet-site)'; \
+   else cd ~/fedfleet && scripts/stop_local.sh >/dev/null; . .venv/bin/activate && scripts/run_sites.sh $AGG 1 3 2; fi"
 
-echo "== Mac -> aggregator path"
-path=$(tailscale ping -c 4 "$AGG" 2>&1 || true)
+echo "== Mac -> aggregator path (the peer relay can take a minute to be offered after the VM boots)"
+path=""
+for _ in 1 2 3 4 5 6; do
+  path=$(tailscale ping -c 4 "$AGG" 2>&1 || true)
+  grep -q "via peer-relay" <<<"$path" && break
+  sleep 10
+done
 if grep -q "via peer-relay" <<<"$path"; then
   echo "   peer relay: $(grep -m1 -Eo 'via peer-relay[^ ]* in [0-9.]+ms' <<<"$path")"
 elif grep -q "via DERP" <<<"$path"; then

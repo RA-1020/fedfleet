@@ -1,0 +1,15 @@
+[Unit]
+Description=FedFleet site 2 (Flower SuperNode) on the Azure VM, started at boot
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/fedfleet
+Environment=SITE_ID=2 SITE_TOTAL=3 SITE_AGG=fedfleet-agg
+ExecStart=/home/ubuntu/fedfleet/scripts/site_service.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

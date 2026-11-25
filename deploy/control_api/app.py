@@ -42,7 +42,8 @@ from pydantic import BaseModel, Field
 HOME = Path.home()
 DIR = Path(os.environ.get("FEDFLEET_DIR", str(HOME / "fedfleet"))).expanduser()
 CONNECTION = os.environ.get("FEDFLEET_CONNECTION", "fedfleet-vm")
-SERVICES = ("fedfleet-superlink", "fedfleet-exporter", "fedfleet-backup", "prometheus", "grafana-server")
+SERVICES = ("fedfleet-superlink", "fedfleet-exporter", "fedfleet-backup", "prometheus", "grafana-server",
+            "fedfleet-watchdog.timer", "fedfleet-elastic")
 RUN_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
 # The run summary and cost code is shared with the Azure Function round report.
@@ -55,6 +56,7 @@ app = FastAPI(title="FedFleet control API", version="0.1.0",
               description="Status, runs and cost of the FedFleet federation; starts runs.")
 
 AUDIT = Path(os.environ.get("FEDFLEET_AUDIT", str(HOME / "fedfleet-audit" / "audit.jsonl"))).expanduser()
+ELASTIC_DIR = Path(os.environ.get("FEDFLEET_ELASTIC_DIR", str(HOME / "fedfleet-elastic"))).expanduser()
 
 
 def _audit(entry: dict) -> None:
@@ -158,7 +160,23 @@ def status() -> dict:
                          "sites_online": r.get("nodes_online"), "sites_replied": r.get("nodes_replied"),
                          "sites_asked": r.get("nodes_asked"), "timestamp": ts,
                          "age_seconds": round(time.time() - ts, 1) if ts else None})
+    queue = []
+    for f in sorted((ELASTIC_DIR / "queue").glob("*.json")):
+        try:
+            e = json.loads(f.read_text())
+            queue.append({"run": f.stem, "queued_at": e.get("queued_at"),
+                          "needed": e.get("request", {}).get("min_nodes")})
+        except (OSError, json.JSONDecodeError):
+            continue
+    elastic = None
+    try:
+        st = json.loads((ELASTIC_DIR / "state.json").read_text())
+        elastic = {k: st.get(k) for k in ("vm_power", "started_by_controller", "vm_minutes_today",
+                                          "budget_minutes_per_day", "last_action")}
+    except (OSError, json.JSONDecodeError):
+        pass
     return {"services": {s: _service_state(s) for s in SERVICES}, "runs": len(runs), "latest_round": last,
+            "queue": queue, "elastic": elastic,
             "note": "Costs are list prices before free tiers and credits."}
 
 
@@ -196,6 +214,9 @@ class RunRequest(BaseModel):
                                      "before a round would take epsilon past it; needs dp and noise above 0; "
                                      "fixed for the life of a run")
     secagg: bool = Field(False, description="secure aggregation (SecAgg+); works with dp, not with compression")
+    wait_for_sites: bool = Field(False, description="if too few sites are online, queue the run instead of "
+                                                    "refusing it; the elasticity controller starts the Azure "
+                                                    "site and starts the run once enough sites are online")
     auto_resume: bool = Field(True, description="let the aggregator's watchdog resume this run by itself if the "
                                                  "aggregator crashes (Flower then marks it failed for lack of heartbeat)")
     resume: bool = Field(False, description="continue fedfleet-runs-<name> from its latest_checkpoint.pt; "
@@ -371,9 +392,24 @@ def _start_run(req: RunRequest, request: Request) -> dict:
         online = _online_sites()
     except Exception:
         raise HTTPException(503, "could not read the list of sites from the aggregator (flwr supernode ls)")
+    if online < req.min_nodes and req.wait_for_sites:
+        # Hand the run to the elasticity controller (deploy/elastic): it starts the Azure site if
+        # its cost guard allows, and submits this request (without wait_for_sites) once enough
+        # sites are online, or gives up after its queue timeout.
+        q = ELASTIC_DIR / "queue"
+        q.mkdir(parents=True, exist_ok=True)
+        entry = q / f"{req.name}.json"
+        if entry.exists():
+            raise HTTPException(409, f"a run named {req.name} is already queued")
+        body = {**req.model_dump(), "wait_for_sites": False}
+        entry.write_text(json.dumps({"queued_at": round(time.time(), 3), "online": online,
+                                     "request": body}) + "\n")
+        request.state.audit["queued"] = True
+        return {"queued": True, "run": f"fedfleet-runs-{req.name}", "online": online,
+                "needed": req.min_nodes, "watch": "/status (queue)"}
     if online < req.min_nodes:
         raise HTTPException(409, f"only {online} site(s) online, and this run needs {req.min_nodes}; "
-                                 "start the sites first")
+                                 "start the sites first, or ask with wait_for_sites")
     cmd = [str(DIR / ".venv" / "bin" / "flwr"), "run", str(DIR), CONNECTION,
            "--run-config", _run_config(req, f"~/fedfleet-runs-{req.name}")]
     env = {**os.environ, "FLWR_DISABLE_RUNTIME_DEPENDENCY_INSTALLATION": "1",

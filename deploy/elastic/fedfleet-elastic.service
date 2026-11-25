@@ -1,0 +1,20 @@
+[Unit]
+Description=FedFleet elasticity controller (start the Azure site on demand, deallocate when idle)
+After=network-online.target fedfleet-superlink.service fedfleet-control-api.service
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu
+# Origin key for the local control API, then the Azure target and the controller's settings.
+EnvironmentFile=/etc/fedfleet/control-api.env
+EnvironmentFile=/etc/fedfleet/elastic.env
+# The service principal (root-only file); systemd hands a copy to this service alone.
+LoadCredential=azure-sp:/etc/fedfleet/azure-sp.json
+ExecStart=/home/ubuntu/fedfleet/.venv/bin/python /home/ubuntu/fedfleet/deploy/elastic/fedfleet_elastic.py
+Restart=always
+RestartSec=15
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

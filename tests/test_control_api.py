@@ -295,3 +295,18 @@ def test_second_run_request_while_one_is_in_progress_is_refused():
         assert not (HOME / "fedfleet-runs-concurrent").exists()
     finally:
         api._start_lock.release()
+
+
+def test_wait_for_sites_queues_the_run():
+    api._online_sites = lambda: 2
+    try:
+        r = c.post("/runs", json={"name": "elastic-q", "min_nodes": 3, "wait_for_sites": True}, headers=KEY)
+        assert r.status_code == 202 and r.json()["queued"] is True and r.json()["needed"] == 3
+        e = json.loads((HOME / "fedfleet-elastic" / "queue" / "elastic-q.json").read_text())
+        assert e["request"]["wait_for_sites"] is False and e["request"]["min_nodes"] == 3
+        assert c.post("/runs", json={"name": "elastic-q", "min_nodes": 3, "wait_for_sites": True},
+                      headers=KEY).status_code == 409
+        assert c.post("/runs", json={"name": "no-wait", "min_nodes": 3}, headers=KEY).status_code == 409
+        assert [q["run"] for q in c.get("/status", headers=KEY).json()["queue"]] == ["elastic-q"]
+    finally:
+        api._online_sites = lambda: 3
