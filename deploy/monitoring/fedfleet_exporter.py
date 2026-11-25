@@ -163,7 +163,8 @@ def run_name(path: Path) -> str:
 
 
 # Services on the aggregator whose state the alerts watch (fedfleet-alerts.yml).
-SERVICES = ("fedfleet-superlink", "fedfleet-control-api", "fedfleet-backup", "cloudflared", "grafana-server")
+SERVICES = ("fedfleet-superlink", "fedfleet-control-api", "fedfleet-backup", "cloudflared", "grafana-server",
+            "fedfleet-watchdog.timer")   # a timer is "active" while it is scheduled
 
 
 def services_text(services=SERVICES, run=subprocess.run) -> str:

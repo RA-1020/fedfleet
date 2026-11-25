@@ -1,0 +1,13 @@
+[Unit]
+Description=FedFleet watchdog: resume a run the aggregator lost in a crash (one check)
+After=fedfleet-superlink.service fedfleet-control-api.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu
+# Same environment as the control API: the origin key to call it on 127.0.0.1.
+EnvironmentFile=/etc/fedfleet/control-api.env
+ExecStart=/home/ubuntu/fedfleet/.venv/bin/python /home/ubuntu/fedfleet/deploy/watchdog/fedfleet_watchdog.py
+TimeoutStartSec=300
+Nice=5

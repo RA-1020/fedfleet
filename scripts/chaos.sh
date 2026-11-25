@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Chaos drills for Layer 3 (resilience), run from the Mac against the live federation.
 #
-#   scripts/chaos.sh kill <name> [--rounds 6] [--after 3] [--dp-noise Z] [--secagg] --yes
+#   scripts/chaos.sh kill <name> [--rounds 6] [--after 3] [--dp-noise Z] [--secagg] [--auto] --yes
 #       Starts a run, waits until round <after> is logged, waits 5 s more so the kill lands
 #       inside the next round, then SIGKILLs the aggregator (fedfleet-superlink). systemd
 #       restarts it (Restart=always, 5 s); the sites reconnect by themselves. As soon as the
 #       aggregator lists all 3 sites online again, the drill resumes the run from its checkpoint
-#       through the control API and waits for the last round. With --dp-noise the run uses differential privacy and the privacy ledger must
+#       through the control API (retrying until Flower has marked the lost run failed, about a
+#       minute after the kill) and waits for the last round. With --auto the drill does not resume:
+#       the aggregator's watchdog must do it alone, and the drill times it. With --dp-noise the run uses differential privacy and the privacy ledger must
 #       continue across the crash. --yes is required: this is the one sanctioned way to kill
 #       the aggregator, and only between our own rounds.
 #
@@ -42,13 +44,13 @@ FLOWER_PORT="${FLOWER_PORT:-9092}"            # the port sites connect to
 GATEWAY="${GATEWAY:-https://fedfleet-gateway.fedfleet-ra.workers.dev}"
 TOKEN_FILE="${TOKEN_FILE:-$HOME/.fedfleet-api-token}"
 
-usage() { sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '3,32p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 MODE="${1:-}"; NAME="${2:-}"
 [[ "$MODE" == kill || "$MODE" == partition || "$MODE" == delay ]] || usage
 [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] || { echo "name: 1-40 lower-case letters, digits or hyphens"; exit 1; }
 shift 2
 ROUNDS=""; AFTER=""; DP_NOISE=""; SECONDS_CUT=""; YES=0; SECAGG=0
-DELAY_MS=200; JITTER_MS=50; LOSS=2
+DELAY_MS=200; JITTER_MS=50; LOSS=2; AUTO=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --rounds) ROUNDS="$2"; shift 2 ;;
@@ -60,6 +62,7 @@ while [ $# -gt 0 ]; do
     --loss) LOSS="$2"; shift 2 ;;
     --yes) YES=1; shift ;;
     --secagg) SECAGG=1; shift ;;
+    --auto) AUTO=1; shift ;;
     *) usage ;;
   esac
 done
@@ -73,6 +76,7 @@ python3 -c "import sys; sys.exit(0 if float('$LOSS') <= 50 else 1)" || { echo "-
 [ "$DELAY_MS" -le 5000 ] && [ "$JITTER_MS" -le "$DELAY_MS" ] || { echo "--delay-ms at most 5000, --jitter-ms at most --delay-ms"; exit 1; }
 [ -z "$DP_NOISE" ] || [[ "$DP_NOISE" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "--dp-noise: a number"; exit 1; }
 [ "$MODE" != kill ] && [ -n "$DP_NOISE" ] && { echo "--dp-noise is for kill only (a DP run skips rounds with a missing site)"; exit 1; }
+[ "$MODE" != kill ] && [ "$AUTO" = 1 ] && { echo "--auto is for kill only"; exit 1; }
 [ "$MODE" = kill ] && [ "$YES" != 1 ] && { echo "kill stops the aggregator; add --yes to confirm"; exit 1; }
 [ -r "$TOKEN_FILE" ] || { echo "no API token at $TOKEN_FILE"; exit 1; }
 
@@ -140,7 +144,8 @@ DP_JSON=""
 [ -n "$DP_NOISE" ] && DP_JSON=",\"dp\":true,\"dp_noise_multiplier\":$DP_NOISE"
 [ "$SECAGG" = 1 ] && DP_JSON="$DP_JSON,\"secagg\":true"
 if [ "$MODE" = kill ]; then
-  BODY="{\"name\":\"$NAME\",\"rounds\":$ROUNDS,\"min_nodes\":3$DP_JSON}"
+  # Without --auto the drill resumes by itself, so the watchdog must stay out of it.
+  BODY="{\"name\":\"$NAME\",\"rounds\":$ROUNDS,\"min_nodes\":3,\"auto_resume\":$([ "$AUTO" = 1 ] && echo true || echo false)$DP_JSON}"
 else
   BODY="{\"name\":\"$NAME\",\"rounds\":$ROUNDS,\"min_nodes\":2,\"round_timeout\":60$DP_JSON}"
 fi
@@ -166,8 +171,35 @@ if [ "$MODE" = kill ]; then
   echo "== waiting until the aggregator lists 3 sites online (up to 3 min), then resuming"
   T_SITES=$(wait_online count 3 180) || { echo "!! fewer than 3 sites online after 3 min; resuming anyway (the run waits for them)"; T_SITES=""; }
   [ -n "$T_SITES" ] && echo "   3 sites online at +$(python3 -c "print(f'{$T_SITES - $T_KILL:.1f}')") s"
-  T_RESUME=$(agg_now)
-  post "{\"name\":\"$NAME\",\"rounds\":$ROUNDS,\"min_nodes\":3,\"resume\":true$DP_JSON}" || { echo "!! resume was refused"; exit 1; }
+  if [ "$AUTO" = 1 ]; then
+    echo "== waiting for the watchdog to resume the run (up to 5 min)"
+    # shellcheck disable=SC2029  # NAME is checked above
+    OLD_ID=$(ssh "ubuntu@$AGG" "cat ~/fedfleet-runs-$NAME/active_run.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')
+    T_RESUME=""
+    for _ in $(seq 1 60); do
+      sleep 5
+      # shellcheck disable=SC2029
+      m=$(ssh "ubuntu@$AGG" "cat ~/fedfleet-runs-$NAME/active_run.json" 2>/dev/null)
+      new=$(python3 -c 'import json,sys; m=json.loads(sys.argv[1]); print(m["run_id"], m.get("started", ""))' "$m" 2>/dev/null)
+      if [ -n "$new" ] && [ "${new%% *}" != "$OLD_ID" ]; then T_RESUME="${new##* }"; break; fi
+    done
+    [ -n "$T_RESUME" ] || { echo "!! the watchdog did not resume within 5 min; see: ssh ubuntu@$AGG journalctl -u fedfleet-watchdog -n 30"; exit 1; }
+    echo "   resumed by the watchdog as run ${new%% *}, +$(python3 -c "print(f'{$T_RESUME - $T_KILL:.1f}')") s after the kill"
+    # shellcheck disable=SC2029  # NAME is checked above
+    ssh "ubuntu@$AGG" "journalctl -u fedfleet-watchdog --since '-6 min' --no-pager -o cat | grep -F 'fedfleet-runs-$NAME'" | tail -4 | sed 's/^/   /'
+  else
+    T_RESUME=$(agg_now)
+    RESUME_BODY="{\"name\":\"$NAME\",\"rounds\":$ROUNDS,\"min_nodes\":3,\"resume\":true,\"auto_resume\":false$DP_JSON}"
+    # Flower releases the lost run (finished:failed, "No heartbeat") about a minute after the kill;
+    # until then the API answers "still in progress". Retry for up to 3 min.
+    ok=0
+    for _ in $(seq 1 36); do
+      if post "$RESUME_BODY"; then ok=1; break; fi
+      sleep 5
+    done
+    [ "$ok" = 1 ] || { echo "!! resume was refused for 3 min"; exit 1; }
+    echo "   resume accepted +$(python3 -c "print(f'{$(agg_now) - $T_KILL:.1f}')") s after the kill (first try at +$(python3 -c "print(f'{$T_RESUME - $T_KILL:.1f}')") s)"
+  fi
 else
   # shellcheck disable=SC2029
   SITE_NODE=$(ssh "ubuntu@$AGG" "cat ~/fedfleet-runs-$NAME/rounds.jsonl" | python3 -c '
@@ -280,7 +312,8 @@ for r in rows:
         r["round"], r.get("nodes_replied"), r.get("nodes_asked"), site_ids(r),
         r["train_round_seconds"], r["global_acc"], eps, note))
 if kill:
-    print("   aggregator back %.1f s after the kill; resume requested at +%.1f s" % (up - kill, resume - kill))
+    print("   aggregator back %.1f s after the kill; resume %s at +%.1f s" % (
+        up - kill, "started by the watchdog" if os.environ.get("AUTO") == "1" else "first requested", resume - kill))
     if sites_up:
         print("   all 3 sites online %.1f s after the kill" % (sites_up - kill))
 if cut and os.environ.get("MODE") == "delay":
@@ -317,4 +350,4 @@ PY
 # shellcheck disable=SC2029
 ssh "ubuntu@$AGG" "cat ~/fedfleet-runs-$NAME/rounds.jsonl" | \
   T_KILL="${T_KILL:-}" T_UP="${T_UP:-}" T_SITES="${T_SITES:-}" T_RESUME="${T_RESUME:-}" T_CUT="${T_CUT:-}" \
-  T_BACK="${T_BACK:-}" CUT="$SECONDS_CUT" MODE="$MODE" NETEM="${NETEM:-}" NETEM_MID="${NETEM_MID:-}" PATH_MID="${PATH_MID:-}" python3 "$REPORT"
+  T_BACK="${T_BACK:-}" CUT="$SECONDS_CUT" MODE="$MODE" AUTO="$AUTO" NETEM="${NETEM:-}" NETEM_MID="${NETEM_MID:-}" PATH_MID="${PATH_MID:-}" python3 "$REPORT"

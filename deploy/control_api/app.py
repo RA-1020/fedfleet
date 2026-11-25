@@ -30,6 +30,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -195,6 +196,8 @@ class RunRequest(BaseModel):
                                      "before a round would take epsilon past it; needs dp and noise above 0; "
                                      "fixed for the life of a run")
     secagg: bool = Field(False, description="secure aggregation (SecAgg+); works with dp, not with compression")
+    auto_resume: bool = Field(True, description="let the aggregator's watchdog resume this run by itself if the "
+                                                 "aggregator crashes (Flower then marks it failed for lack of heartbeat)")
     resume: bool = Field(False, description="continue fedfleet-runs-<name> from its latest_checkpoint.pt; "
                                              "rounds is then the total to reach, not the number to add")
 
@@ -287,8 +290,24 @@ def _run_config(req: RunRequest, metrics_dir: str) -> str:
     return " ".join(f"{k}={val(v)}" for k, v in cfg.items())
 
 
+# One run request at a time. `flwr run` takes about 20 s, and the guard against two runs on one
+# folder reads active_run.json, which is written only after it returns; two resumes arriving in
+# that window (a person and the watchdog, say) would otherwise both pass and both start.
+_start_lock = threading.Lock()
+
+
 @app.post("/runs", status_code=202, dependencies=[Depends(require_key)])
 def start_run(req: RunRequest, request: Request) -> dict:
+    if not _start_lock.acquire(blocking=False):
+        request.state.audit = {"run": req.name, "request": req.model_dump()}
+        raise HTTPException(409, "another run request is being processed; try again in a few seconds")
+    try:
+        return _start_run(req, request)
+    finally:
+        _start_lock.release()
+
+
+def _start_run(req: RunRequest, request: Request) -> dict:
     # What was asked, for the audit log (allow-listed settings only; there are no secrets here).
     request.state.audit = {"run": req.name, "request": req.model_dump()}
     if not RUN_NAME.match(req.name):
@@ -370,7 +389,10 @@ def start_run(req: RunRequest, request: Request) -> dict:
         raise HTTPException(502, f"flwr run failed (exit {r.returncode}): {tail}")
     # Remember which run uses this folder, so a resume cannot start while it is still going.
     metrics_dir.mkdir(parents=True, exist_ok=True)
-    (metrics_dir / "active_run.json").write_text(json.dumps({"run_id": m.group(1), "resume": req.resume}) + "\n")
+    # The request is kept too, so the watchdog can resume exactly this run after a crash.
+    (metrics_dir / "active_run.json").write_text(json.dumps({
+        "run_id": m.group(1), "resume": req.resume, "started": round(time.time(), 3),
+        "request": req.model_dump()}) + "\n")
     request.state.audit["run_id"] = m.group(1)
     return {"run_id": m.group(1), "run": f"fedfleet-runs-{req.name}", "rounds": req.rounds,
             "min_nodes": req.min_nodes, "compression": req.compression, "dp": req.dp,

@@ -268,3 +268,30 @@ def test_audit_log_records_who_what_and_outcome():
     assert started["status"] == 202 and started["via_gateway"] and started["client_ip"] == "203.0.113.7"
     assert started["token_id"] == "a1b2c3d4e5f6" and started["run"] == "audited" and started["run_id"] == "77"
     assert started["request"]["rounds"] == 2 and "test-origin-key" not in log.read_text()
+
+
+def test_marker_keeps_the_request_for_the_watchdog():
+    orig = api.subprocess.run
+    api.subprocess.run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "Successfully started run 88\n", "")
+    try:
+        assert c.post("/runs", json={"name": "wdog", "rounds": 4, "dp": True, "dp_noise_multiplier": 0.3},
+                      headers=KEY).status_code == 202
+        m = json.loads((HOME / "fedfleet-runs-wdog" / "active_run.json").read_text())
+        assert m["run_id"] == "88" and m["request"]["rounds"] == 4
+        assert m["request"]["dp_noise_multiplier"] == 0.3 and m["request"]["auto_resume"] is True
+        assert c.post("/runs", json={"name": "wdog2", "auto_resume": False},
+                      headers=KEY).status_code == 202
+        m = json.loads((HOME / "fedfleet-runs-wdog2" / "active_run.json").read_text())
+        assert m["request"]["auto_resume"] is False
+    finally:
+        api.subprocess.run = orig
+
+
+def test_second_run_request_while_one_is_in_progress_is_refused():
+    assert api._start_lock.acquire(blocking=False)
+    try:
+        r = c.post("/runs", json={"name": "concurrent"}, headers=KEY)
+        assert r.status_code == 409 and "another run request" in r.json()["detail"]
+        assert not (HOME / "fedfleet-runs-concurrent").exists()
+    finally:
+        api._start_lock.release()
