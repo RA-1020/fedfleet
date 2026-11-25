@@ -10,6 +10,15 @@
 #       continue across the crash. --yes is required: this is the one sanctioned way to kill
 #       the aggregator, and only between our own rounds.
 #
+#   scripts/chaos.sh delay <name> [--rounds 8] [--after 2] [--seconds 240] [--delay-ms 200]
+#                    [--jitter-ms 50] [--loss 2] [--secagg]
+#       A bad network instead of a dead one: same run settings as partition, then on the Azure VM
+#       only, netem delays the site's packets to the aggregator's Flower port by <delay-ms> (+/-
+#       <jitter-ms>) and drops <loss> percent of them. A tc filter picks just that traffic, so SSH
+#       and the peer relay are untouched. As with partition, the heal (tc qdisc del) is scheduled
+#       on the VM first. Reports round times before, during and after, whether site 2 kept up, and
+#       netem's own packet counters as proof the impairment was applied.
+#
 #   scripts/chaos.sh partition <name> [--rounds 10] [--after 2] [--seconds 90] [--secagg]
 #       Starts a run that tolerates a missing site (min_nodes 2, round timeout 60 s), waits
 #       until round <after> is logged, then cuts the Azure site off from the aggregator: on
@@ -33,29 +42,37 @@ FLOWER_PORT="${FLOWER_PORT:-9092}"            # the port sites connect to
 GATEWAY="${GATEWAY:-https://fedfleet-gateway.fedfleet-ra.workers.dev}"
 TOKEN_FILE="${TOKEN_FILE:-$HOME/.fedfleet-api-token}"
 
-usage() { sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 MODE="${1:-}"; NAME="${2:-}"
-[[ "$MODE" == kill || "$MODE" == partition ]] || usage
+[[ "$MODE" == kill || "$MODE" == partition || "$MODE" == delay ]] || usage
 [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] || { echo "name: 1-40 lower-case letters, digits or hyphens"; exit 1; }
 shift 2
-ROUNDS=""; AFTER=""; DP_NOISE=""; SECONDS_CUT=90; YES=0; SECAGG=0
+ROUNDS=""; AFTER=""; DP_NOISE=""; SECONDS_CUT=""; YES=0; SECAGG=0
+DELAY_MS=200; JITTER_MS=50; LOSS=2
 while [ $# -gt 0 ]; do
   case "$1" in
     --rounds) ROUNDS="$2"; shift 2 ;;
     --after) AFTER="$2"; shift 2 ;;
     --dp-noise) DP_NOISE="$2"; shift 2 ;;
     --seconds) SECONDS_CUT="$2"; shift 2 ;;
+    --delay-ms) DELAY_MS="$2"; shift 2 ;;
+    --jitter-ms) JITTER_MS="$2"; shift 2 ;;
+    --loss) LOSS="$2"; shift 2 ;;
     --yes) YES=1; shift ;;
     --secagg) SECAGG=1; shift ;;
     *) usage ;;
   esac
 done
 [ -n "$AFTER" ] || { [ "$MODE" = kill ] && AFTER=3 || AFTER=2; }
-[ -n "$ROUNDS" ] || { [ "$MODE" = kill ] && ROUNDS=6 || ROUNDS=10; }
-for v in "$ROUNDS" "$AFTER" "$SECONDS_CUT"; do [[ "$v" =~ ^[0-9]+$ ]] || { echo "numbers only: $v"; exit 1; }; done
+[ -n "$ROUNDS" ] || case "$MODE" in kill) ROUNDS=6 ;; delay) ROUNDS=8 ;; *) ROUNDS=10 ;; esac
+[ -n "$SECONDS_CUT" ] || { [ "$MODE" = delay ] && SECONDS_CUT=240 || SECONDS_CUT=90; }
+for v in "$ROUNDS" "$AFTER" "$SECONDS_CUT" "$DELAY_MS" "$JITTER_MS"; do [[ "$v" =~ ^[0-9]+$ ]] || { echo "numbers only: $v"; exit 1; }; done
 [ "$AFTER" -lt "$ROUNDS" ] || { echo "--after must be below --rounds"; exit 1; }
+[[ "$LOSS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "--loss: a percentage"; exit 1; }
+python3 -c "import sys; sys.exit(0 if float('$LOSS') <= 50 else 1)" || { echo "--loss: at most 50"; exit 1; }
+[ "$DELAY_MS" -le 5000 ] && [ "$JITTER_MS" -le "$DELAY_MS" ] || { echo "--delay-ms at most 5000, --jitter-ms at most --delay-ms"; exit 1; }
 [ -z "$DP_NOISE" ] || [[ "$DP_NOISE" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "--dp-noise: a number"; exit 1; }
-[ "$MODE" = partition ] && [ -n "$DP_NOISE" ] && { echo "--dp-noise is for kill only (a DP run skips rounds with a missing site)"; exit 1; }
+[ "$MODE" != kill ] && [ -n "$DP_NOISE" ] && { echo "--dp-noise is for kill only (a DP run skips rounds with a missing site)"; exit 1; }
 [ "$MODE" = kill ] && [ "$YES" != 1 ] && { echo "kill stops the aggregator; add --yes to confirm"; exit 1; }
 [ -r "$TOKEN_FILE" ] || { echo "no API token at $TOKEN_FILE"; exit 1; }
 
@@ -161,6 +178,41 @@ print(next(iter(ids), ""))')
   echo "   site 2 is node $SITE_NODE"
   STAMP=$(date +%s)
   RULE="OUTPUT -d $AGG_TS_IP -p tcp --dport $FLOWER_PORT -j DROP"
+fi
+if [ "$MODE" = delay ]; then
+  DEV=tailscale0
+  echo "== preflight on $SITE: netem/prio/u32 modules, $DEV, no custom root qdisc"
+  # shellcheck disable=SC2029
+  pre=$(ssh "ubuntu@$SITE" "sudo modprobe -a sch_netem sch_prio cls_u32 2>&1 && echo netem-ok; ip link show $DEV >/dev/null 2>&1 && echo dev-ok; tc qdisc show dev $DEV root") || true
+  # shellcheck disable=SC2001
+  echo "$pre" | sed 's/^/   /'
+  grep -q netem-ok <<<"$pre" || { echo "!! sch_netem, sch_prio or cls_u32 is missing on $SITE (Azure kernels keep it in linux-modules-extra-\$(uname -r))"; exit 1; }
+  grep -q dev-ok <<<"$pre" || { echo "!! no $DEV on $SITE"; exit 1; }
+  grep -Eq "qdisc (prio|netem|htb|tbf) " <<<"$pre" && { echo "!! $DEV already has a custom root qdisc (left over?); clear it with: sudo tc qdisc del dev $DEV root"; exit 1; }
+  NETEM="delay ${DELAY_MS}ms ${JITTER_MS}ms distribution normal loss ${LOSS}%"
+  echo "== impairing $SITE -> aggregator:$FLOWER_PORT for $SECONDS_CUT s: $NETEM (heal is scheduled on the VM first)"
+  # Band 4 is used only by the filter (priomap sends ordinary traffic to bands 1-3), so only
+  # packets to the aggregator's Flower port see netem.
+  # shellcheck disable=SC2029
+  T_CUT=$(ssh "ubuntu@$SITE" "sudo systemd-run --quiet --unit fedfleet-chaos-heal-$STAMP --on-active=${SECONDS_CUT}s /usr/sbin/tc qdisc del dev $DEV root \
+          && sudo tc qdisc add dev $DEV root handle 1: prio bands 4 priomap 1 2 2 2 1 2 0 0 1 1 1 1 1 1 1 1 \
+          && sudo tc qdisc add dev $DEV parent 1:4 handle 40: netem $NETEM \
+          && sudo tc filter add dev $DEV parent 1: protocol ip prio 1 u32 match ip dst $AGG_TS_IP/32 match ip dport $FLOWER_PORT 0xffff flowid 1:4 \
+          && date +%s.%N") || { echo "!! could not apply the impairment; clearing"; ssh "ubuntu@$SITE" "sudo tc qdisc del dev $DEV root" 2>/dev/null; exit 1; }
+  echo "   impaired at $T_CUT (Azure VM clock), heals at about +$SECONDS_CUT s"
+  sleep $(( SECONDS_CUT / 2 ))
+  # shellcheck disable=SC2029
+  NETEM_MID=$(ssh "ubuntu@$SITE" "tc -s qdisc show dev $DEV parent 1:4" | tr '\n' ' ' | grep -Eo 'Sent [0-9]+ bytes [0-9]+ pkt \(dropped [0-9]+' | head -1)
+  echo "   netem halfway: ${NETEM_MID:-no counters (was the filter matched?)}"
+  sleep $(( SECONDS_CUT - SECONDS_CUT / 2 )); sleep 2
+  # shellcheck disable=SC2029
+  if ssh "ubuntu@$SITE" "tc qdisc show dev $DEV root | grep -q 'qdisc prio'"; then
+    echo "!! the impairment is still there; removing it now"
+    ssh "ubuntu@$SITE" "sudo tc qdisc del dev $DEV root"
+  else
+    echo "   healed: back to the default qdisc"
+  fi
+elif [ "$MODE" = partition ]; then
   echo "== cutting $SITE off from the aggregator for $SECONDS_CUT s (heal is scheduled on the VM first)"
   # shellcheck disable=SC2029  # all values were checked above
   T_CUT=$(ssh "ubuntu@$SITE" "sudo systemd-run --quiet --unit fedfleet-chaos-heal-$STAMP --on-active=${SECONDS_CUT}s /usr/sbin/iptables -D $RULE \
@@ -225,7 +277,23 @@ if kill:
     print("   aggregator back %.1f s after the kill; resume requested at +%.1f s" % (up - kill, resume - kill))
     if sites_up:
         print("   all 3 sites online %.1f s after the kill" % (sites_up - kill))
-if cut:
+if cut and os.environ.get("MODE") == "delay":
+    trained = [r for r in rows if "train_round_seconds" in r]
+    phases = {"before": [], "during": [], "after": []}
+    for r in trained:
+        end = r.get("timestamp", 0); start = end - r["train_round_seconds"]
+        p = "before" if end <= cut else ("after" if start >= heal else "during")
+        phases[p].append(r)
+    for p, rs in phases.items():
+        if not rs:
+            print("   %s: no rounds" % p); continue
+        secs = [r["train_round_seconds"] for r in rs]
+        with2 = sum(1 for r in rs if 2 in site_ids(r))
+        print("   %s: rounds %s, mean %.1f s, max %.1f s, site 2 in %d of %d" % (
+            p, [r["round"] for r in rs], sum(secs) / len(secs), max(secs), with2, len(rs)))
+    print("   impairment: %s" % os.environ.get("NETEM", ""))
+    print("   netem counters halfway: %s" % (os.environ.get("NETEM_MID") or "none"))
+elif cut:
     trained = [r for r in rows if "train_round_seconds" in r]
     miss = [r["round"] for r in trained if r.get("timestamp", 0) > cut and 2 not in site_ids(r)]
     back = [r for r in trained if r.get("timestamp", 0) > heal and 2 in site_ids(r)]
@@ -240,4 +308,4 @@ PY
 # shellcheck disable=SC2029
 ssh "ubuntu@$AGG" "cat ~/fedfleet-runs-$NAME/rounds.jsonl" | \
   T_KILL="${T_KILL:-}" T_UP="${T_UP:-}" T_SITES="${T_SITES:-}" T_RESUME="${T_RESUME:-}" T_CUT="${T_CUT:-}" \
-  T_BACK="${T_BACK:-}" CUT="$SECONDS_CUT" python3 "$REPORT"
+  T_BACK="${T_BACK:-}" CUT="$SECONDS_CUT" MODE="$MODE" NETEM="${NETEM:-}" NETEM_MID="${NETEM_MID:-}" python3 "$REPORT"
