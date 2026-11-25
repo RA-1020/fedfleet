@@ -180,6 +180,8 @@ def elastic_text(path: Path = ELASTIC_STATE) -> str:
         ("fedfleet_elastic_started_by_controller", "1 if the controller started the VM (and will stop it)",
          1.0 if st.get("started_by_controller") else 0.0),
         ("fedfleet_elastic_queue_length", "runs waiting for sites", float(st.get("queue_length") or 0)),
+        ("fedfleet_elastic_site_not_joined", "1 if the controller's VM is up but its site never registered",
+         1.0 if st.get("site_not_joined") else 0.0),
         ("fedfleet_elastic_vm_minutes_today", "minutes the VM has run in the current UTC day",
          float(st.get("vm_minutes_today") or 0)),
         ("fedfleet_elastic_budget_minutes_per_day", "the controller's daily VM budget in minutes",

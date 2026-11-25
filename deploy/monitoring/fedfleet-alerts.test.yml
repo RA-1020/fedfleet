@@ -79,3 +79,30 @@ tests:
       - eval_time: 12m
         alertname: FedFleetPrivacyBudgetNearlySpent
         exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'fedfleet_elastic_site_not_joined'
+        values: '0 1 1'
+      - series: 'fedfleet_elastic_vm_minutes_today'
+        values: '170 181 182'
+      - series: 'fedfleet_elastic_budget_minutes_per_day'
+        values: '180 180 180'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: FedFleetElasticSiteNotJoined
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: FedFleetElasticSiteNotJoined
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "The elasticity controller's Azure VM is up but site 2 never registered"
+              description: "A queued run is waiting and the VM it started has run 5 min without its site joining. Check journalctl -u fedfleet-site on fedfleet-site2; the VM keeps billing until the queue times out and it idles."
+      - eval_time: 2m
+        alertname: FedFleetElasticBudgetSpent
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "The Azure site has used today's VM budget (182 min)"
+              description: "The controller will not start the VM again until the next UTC day."

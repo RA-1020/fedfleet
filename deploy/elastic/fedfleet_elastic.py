@@ -49,6 +49,7 @@ RG = os.environ.get("AZ_RESOURCE_GROUP", "fedfleet-rg")
 VM = os.environ.get("AZ_VM", "fedfleet-site2")
 TICK_S = int(os.environ.get("ELASTIC_TICK_S", "20"))
 IDLE_S = int(os.environ.get("ELASTIC_IDLE_S", "600"))             # 10 min without work -> deallocate
+JOIN_GRACE_S = int(os.environ.get("ELASTIC_JOIN_GRACE_S", "300"))  # VM up this long, site still missing -> flag
 QUEUE_TIMEOUT_S = int(os.environ.get("ELASTIC_QUEUE_TIMEOUT_S", "900"))
 BUDGET_MIN = float(os.environ.get("ELASTIC_BUDGET_MIN_PER_DAY", "180"))   # 3 h of B2s per UTC day
 RATE_PER_HOUR = float(os.environ.get("ELASTIC_VM_RATE_PER_HOUR", "0.0448"))  # deploy/rates.toml B2s
@@ -187,6 +188,9 @@ class Controller:
         st["vm_power"] = power
         if power != prev:
             self.event(now, "vm_power", power=power, was=prev)
+            if power == "running":
+                st["running_since"] = now
+            st.pop("join_flagged", None)
         # Cost meter: count the time since the last tick while the VM is up, whoever started it.
         last = st.get("last_tick")
         if last and prev in ("running", "starting") and now - last < 10 * TICK_S:
@@ -209,6 +213,7 @@ class Controller:
             log(f"flower: {e!r}")
             return
         st["queue_length"], st["sites_online"], st["run_active"] = len(queue), online, active
+        st["site_not_joined"] = bool(st.get("join_flagged"))
         if active or queue:
             st["last_busy"] = now
 
@@ -234,6 +239,13 @@ class Controller:
                 else:
                     f.replace(self.root / "queue" / "failed" / f.name)
                     self.event(now, "run_refused", run=f.stem, code=code, answer=text[:300])
+            elif (power == "running" and st["started_by_controller"]
+                  and now - st.get("running_since", now) >= JOIN_GRACE_S and not st.get("join_flagged")):
+                # The VM booted but its site has not registered: the site service is broken (as on
+                # 25 Nov: flower-superexec not on PATH). Waiting longer will not help; say so once.
+                st["join_flagged"] = True
+                self.event(now, "site_not_joined", run=f.stem, online=online, needed=need,
+                           running_s=round(now - st.get("running_since", now), 1))
             elif power in ("deallocated", "stopped"):
                 if spent >= self.budget_min:
                     if st.get("budget_blocked_day") != utc_day(now):

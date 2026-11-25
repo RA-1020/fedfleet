@@ -62,3 +62,17 @@ groups:
         annotations:
           summary: "Run {{ $labels.run }}: the latest round cost ${{ $value }} at list prices"
           description: "Measured rounds cost about $0.001 (SecAgg+ about $0.0011). Above $0.005 a round is several times longer or larger than usual."
+
+      - alert: FedFleetElasticSiteNotJoined
+        expr: fedfleet_elastic_site_not_joined == 1
+        labels: {severity: critical}
+        annotations:
+          summary: "The elasticity controller's Azure VM is up but site 2 never registered"
+          description: "A queued run is waiting and the VM it started has run 5 min without its site joining. Check journalctl -u fedfleet-site on fedfleet-site2; the VM keeps billing until the queue times out and it idles."
+
+      - alert: FedFleetElasticBudgetSpent
+        expr: fedfleet_elastic_vm_minutes_today >= fedfleet_elastic_budget_minutes_per_day and fedfleet_elastic_budget_minutes_per_day > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "The Azure site has used today's VM budget ({{ $value }} min)"
+          description: "The controller will not start the VM again until the next UTC day."

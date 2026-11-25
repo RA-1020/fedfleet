@@ -147,3 +147,19 @@ def test_azure_rest_calls(tmp_path):
     assert paths[1:] == [f"https://management.azure.com/subscriptions/sub/resourceGroups/rg/providers/"
                          f"Microsoft.Compute/virtualMachines/vm/{a}" for a in ("instanceView", "start", "deallocate")]
     assert sum("oauth2" in u for _, u in seen) == 1   # token reused
+
+
+def test_site_that_never_joins_is_flagged_once(tmp_path):
+    # 25 Nov: the VM booted but site 2's service could not start flower-superexec.
+    c, az, w = make(tmp_path)
+    queue(tmp_path)
+    c.tick(1000)                                   # scale out
+    az.p = "running"; c.tick(1060)                 # up, site missing
+    for t in range(1080, 1060 + el.JOIN_GRACE_S, 20):
+        c.tick(t)
+    assert "site_not_joined" not in events(tmp_path)
+    for t in range(1060 + el.JOIN_GRACE_S, 1060 + el.JOIN_GRACE_S + 200, 20):
+        c.tick(t)
+    assert events(tmp_path).count("site_not_joined") == 1 and c.st["site_not_joined"]
+    w.online = 3; c.tick(1600)                     # site fixed (within the queue timeout): the run goes out
+    assert w.posted and events(tmp_path)[-1] == "run_dispatched"
