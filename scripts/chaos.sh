@@ -10,7 +10,7 @@
 #       continue across the crash. --yes is required: this is the one sanctioned way to kill
 #       the aggregator, and only between our own rounds.
 #
-#   scripts/chaos.sh delay <name> [--rounds 8] [--after 2] [--seconds 240] [--delay-ms 200]
+#   scripts/chaos.sh delay <name> [--rounds 12] [--after 2] [--seconds 150] [--delay-ms 200]
 #                    [--jitter-ms 50] [--loss 2] [--secagg]
 #       A bad network instead of a dead one: same run settings as partition, then on the Azure VM
 #       only, netem delays the site's packets to the aggregator's Flower port by <delay-ms> (+/-
@@ -64,8 +64,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$AFTER" ] || { [ "$MODE" = kill ] && AFTER=3 || AFTER=2; }
-[ -n "$ROUNDS" ] || case "$MODE" in kill) ROUNDS=6 ;; delay) ROUNDS=8 ;; *) ROUNDS=10 ;; esac
-[ -n "$SECONDS_CUT" ] || { [ "$MODE" = delay ] && SECONDS_CUT=240 || SECONDS_CUT=90; }
+[ -n "$ROUNDS" ] || case "$MODE" in kill) ROUNDS=6 ;; delay) ROUNDS=12 ;; *) ROUNDS=10 ;; esac
+[ -n "$SECONDS_CUT" ] || { [ "$MODE" = delay ] && SECONDS_CUT=150 || SECONDS_CUT=90; }
 for v in "$ROUNDS" "$AFTER" "$SECONDS_CUT" "$DELAY_MS" "$JITTER_MS"; do [[ "$v" =~ ^[0-9]+$ ]] || { echo "numbers only: $v"; exit 1; }; done
 [ "$AFTER" -lt "$ROUNDS" ] || { echo "--after must be below --rounds"; exit 1; }
 [[ "$LOSS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "--loss: a percentage"; exit 1; }
@@ -204,6 +204,10 @@ if [ "$MODE" = delay ]; then
   # shellcheck disable=SC2029
   NETEM_MID=$(ssh "ubuntu@$SITE" "tc -s qdisc show dev $DEV parent 1:4" | tr '\n' ' ' | grep -Eo 'Sent [0-9]+ bytes [0-9]+ pkt \(dropped [0-9]+' | head -1)
   echo "   netem halfway: ${NETEM_MID:-no counters (was the filter matched?)}"
+  # How this Mac (sites 0 and 1) reaches the aggregator right now: direct, via the peer relay
+  # on the Azure VM, or via a DERP relay. Informational only.
+  PATH_MID=$(tailscale status 2>/dev/null | grep -E "[[:space:]]${AGG}[[:space:]]" | sed -E 's/.*(active|idle);[[:space:]]*//' | cut -c1-80)
+  echo "   Mac -> aggregator path halfway: ${PATH_MID:-unknown (tailscale CLI not found)}"
   sleep $(( SECONDS_CUT - SECONDS_CUT / 2 )); sleep 2
   # shellcheck disable=SC2029
   if ssh "ubuntu@$SITE" "tc qdisc show dev $DEV root | grep -q 'qdisc prio'"; then
@@ -267,6 +271,8 @@ for r in rows:
     if kill and ts and ts > kill and not seen_after:
         seen_after = True
         note = "  <- first round after the kill, %.1f s after it" % (ts - kill)
+    if r.get("aggregated") is False:
+        note = ", NOT aggregated (%s)" % r.get("skipped", "no aggregate") + note
     sa = r.get("secagg")
     if sa is not None:
         note = (", SecAgg+" + ("" if sa.get("aggregated") else " not aggregated")) + note
@@ -293,6 +299,9 @@ if cut and os.environ.get("MODE") == "delay":
             p, [r["round"] for r in rs], sum(secs) / len(secs), max(secs), with2, len(rs)))
     print("   impairment: %s" % os.environ.get("NETEM", ""))
     print("   netem counters halfway: %s" % (os.environ.get("NETEM_MID") or "none"))
+    print("   Mac -> aggregator path halfway: %s" % (os.environ.get("PATH_MID") or "unknown"))
+    skipped = [r["round"] for r in trained if r.get("aggregated") is False]
+    print("   rounds not aggregated (too few replies): %s" % (skipped or "none"))
 elif cut:
     trained = [r for r in rows if "train_round_seconds" in r]
     miss = [r["round"] for r in trained if r.get("timestamp", 0) > cut and 2 not in site_ids(r)]
@@ -308,4 +317,4 @@ PY
 # shellcheck disable=SC2029
 ssh "ubuntu@$AGG" "cat ~/fedfleet-runs-$NAME/rounds.jsonl" | \
   T_KILL="${T_KILL:-}" T_UP="${T_UP:-}" T_SITES="${T_SITES:-}" T_RESUME="${T_RESUME:-}" T_CUT="${T_CUT:-}" \
-  T_BACK="${T_BACK:-}" CUT="$SECONDS_CUT" MODE="$MODE" NETEM="${NETEM:-}" NETEM_MID="${NETEM_MID:-}" python3 "$REPORT"
+  T_BACK="${T_BACK:-}" CUT="$SECONDS_CUT" MODE="$MODE" NETEM="${NETEM:-}" NETEM_MID="${NETEM_MID:-}" PATH_MID="${PATH_MID:-}" python3 "$REPORT"

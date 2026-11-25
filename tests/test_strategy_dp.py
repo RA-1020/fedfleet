@@ -194,3 +194,57 @@ def test_flower_backstop_and_ledger_keep_max_epsilon():
     # a ledger saved with one budget cannot be continued under another (Flower checks the config)
     with pytest.raises(ValueError):
         run(dp={**dp, "max_epsilon": 80.0}, clip=1.0, rounds=1, dp_state=ledger, offset=1)
+
+
+class SilentGrid(FakeGrid):
+    """Like FakeGrid, but in the given rounds only the listed nodes reply (as when the
+    others miss the round timeout)."""
+    def __init__(self, only: dict):
+        super().__init__()
+        self.only = only
+
+    def send_and_receive(self, messages, timeout=None):
+        replies = super().send_and_receive(messages, timeout)
+        rnd = int(messages[0].content["config"]["server-round"]) if messages else 0
+        keep = self.only.get(rnd)
+        return replies if keep is None else [r for r in replies if r.metadata.src_node_id in keep]
+
+
+def run_silent(only, min_replies, rounds=3):
+    d = Path(tempfile.mkdtemp())
+    s = CommsFedAvg(metrics_dir=str(d), head_only=True, fraction_evaluate=0.0, fraction_train=1.0,
+                    min_replies=min_replies, min_train_nodes=2, min_evaluate_nodes=2, min_available_nodes=2)
+    saved = []
+    s._checkpoint = lambda rnd, arrays: saved.append((rnd, arrays))
+    res = s.start(grid=SilentGrid(only), initial_arrays=START, num_rounds=rounds, timeout=5,
+                  evaluate_fn=lambda r, a: (s.log_global(r, 0.5, 1.0), MetricRecord({"acc": 0.5}))[1])
+    rows = [json.loads(l) for l in (d / "rounds.jsonl").read_text().splitlines()]
+    return res, [r for r in rows if "train_round_seconds" in r], saved
+
+
+def test_round_with_too_few_replies_keeps_the_previous_model():
+    # Round 2: only node 13 replies (as in drill delay-a, round 7). With min_replies 2 the
+    # round is logged, not aggregated, not checkpointed, and round 3 starts from round 1's model.
+    res, rows, saved = run_silent({2: {13}}, min_replies=2)
+    assert [r["aggregated"] for r in rows] == [True, False, True]
+    assert rows[1]["nodes_replied"] == 1 and "1 of the 2" in rows[1]["skipped"]
+    assert [rnd for rnd, _ in saved] == [1, 3]
+    total = sum(SIZES.values())
+    want = sum((np.concatenate([site_delta(n, 1)["w"], site_delta(n, 1)["b"]])
+                + np.concatenate([site_delta(n, 3)["w"], site_delta(n, 3)["b"]])) * w / total
+               for n, w in SIZES.items())
+    assert np.allclose(flat(res.arrays), want, atol=1e-5)
+
+
+def test_without_the_rule_one_reply_becomes_the_global_model():
+    # The behaviour seen live before the fix: FedAvg averages whatever arrives.
+    res, rows, saved = run_silent({2: {13}}, min_replies=1, rounds=2)
+    assert rows[1]["aggregated"] is True and "skipped" not in rows[1]
+    one = flat(saved[0][1]) + np.concatenate([site_delta(13, 2)["w"], site_delta(13, 2)["b"]])
+    assert np.allclose(flat(res.arrays), one, atol=1e-5)
+
+
+def test_two_of_three_replies_are_still_aggregated():
+    # A partition drill drops one site of three; that round is still aggregated with min 2.
+    _, rows, _ = run_silent({2: {11, 12}}, min_replies=2)
+    assert all(r["aggregated"] for r in rows) and rows[1]["nodes_replied"] == 2

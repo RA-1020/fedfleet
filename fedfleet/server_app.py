@@ -191,6 +191,8 @@ def main(grid: Grid, context: Context) -> None:
         # Sites' own evaluation reports per-site accuracy and test-set size in clear text; under
         # DP that is side information about a site, so it is off (the public test set remains).
         fraction_evaluate=1.0 if (bool(cfg["site-eval"]) and dp is None) else 0.0,
+        # min-nodes is also the fewest replies a round is aggregated from (see CommsFedAvg).
+        min_replies=min_nodes,
         min_train_nodes=min_nodes,
         min_evaluate_nodes=min_nodes,
         min_available_nodes=min_nodes,

@@ -135,8 +135,14 @@ class CommsFedAvg(Strategy):
 
     def __init__(self, metrics_dir: str, head_only: bool, round_offset: int = 0,
                  rates: dict | None = None, compression: str = "none", dp: dict | None = None,
-                 dp_state: dict | None = None, **kwargs) -> None:
+                 dp_state: dict | None = None, min_replies: int = 1, **kwargs) -> None:
         super().__init__()
+        # Fewest successful replies a round may be aggregated from. Below it the round is
+        # logged but not aggregated, and the previous global model is kept (Flower's start()
+        # keeps its arrays when aggregate_train returns None). Without this, FedAvg averages
+        # whatever arrives, so a round with one reply makes that one site's model the global
+        # model and, outside SecAgg+, publishes its update as is.
+        self.min_replies = max(1, int(min_replies))
         kwargs.setdefault("train_metrics_aggr_fn", aggregate_train_metrics)
         if dp:
             kwargs["weighted_by_key"] = DP_WEIGHT_KEY
@@ -232,7 +238,14 @@ class CommsFedAvg(Strategy):
         # so FedAvg averages weights exactly as in the uncompressed case.
         for m in ok:
             decode_content(m.content, self._sent_arrays)
-        arrays, metrics = self.inner.aggregate_train(server_round, replies)
+        if len(ok) < self.min_replies:
+            # Nothing reaches the inner strategy, so under DP no noise is drawn and no privacy
+            # is spent for this round.
+            self._row["skipped"] = f"{len(ok)} of the {self.min_replies} replies required"
+            arrays, metrics = None, None
+        else:
+            arrays, metrics = self.inner.aggregate_train(server_round, replies)
+        self._row["aggregated"] = arrays is not None
         if metrics is not None:
             self._row["train_loss"] = metrics.get("train_loss")
         if self.dp:
@@ -355,6 +368,8 @@ class CommsFedAvg(Strategy):
                   + ("n/a" if s.get("turnaround_seconds") is None else f"{s['turnaround_seconds']} s"))
         for node in r.get("nodes_missing", []):
             print(f"[FedFleet]   no reply from node {node}")
+        if r.get("skipped"):
+            print(f"[FedFleet]   not aggregated: {r['skipped']}; the previous global model is kept")
         if "dp" in r:
             d = r["dp"]
             eps = "not accounted (no noise)" if d["epsilon"] is None else f"epsilon {d['epsilon']:.3g} at delta {d['delta']:g}"

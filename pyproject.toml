@@ -27,7 +27,7 @@ clientapp = "fedfleet.client_app:app"
 [tool.flwr.app.config]
 num-server-rounds = 10
 fraction-train = 1.0
-min-nodes = 2               # a round needs at least this many nodes (dropout tolerance)
+min-nodes = 2               # a round starts with and is aggregated from at least this many sites
 round-timeout = 120.0       # seconds; slower or offline nodes are skipped for the round
 local-epochs = 1
 batch-size = 64
