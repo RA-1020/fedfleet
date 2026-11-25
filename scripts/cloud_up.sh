@@ -1,15 +1,47 @@
 #!/usr/bin/env bash
 # Bring the 3-site cloud federation up from the Mac, ready for `flwr run`:
+#   0. point the peer relay's firewall rule at this Mac's current public address,
 #   1. start the Azure site VM (deallocated between tests, so it bills only while up),
 #   2. wait for it on Tailscale, 3. check the aggregator answers on 8000 and 9092,
 #   4. restart the two Mac sites, 5. start site 2 on the Azure VM.
 #   scripts/cloud_up.sh                 (defaults below; override with environment variables)
 # If `az` fails with connection resets, start the VM in the portal and rerun with SKIP_AZ=1.
 # If the aggregator check fails but `tailscale ping` works, quit and reopen Tailscale.
+# The Mac reaches the aggregator through a Tailscale peer relay on the Azure VM, which needs
+# inbound UDP 40000 there. The Azure firewall rule admits only the Oracle VM and the Mac's
+# current public address, which step 0 reads from `tailscale netcheck` and writes into the rule
+# (any older address is dropped). RELAY_RULE=0 skips it; the Mac then falls back to Tailscale's
+# public DERP relay, which works but is slower and has dropped rounds.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 RG="${RG:-fedfleet-rg}"; VM="${VM:-fedfleet-site2}"
+NSG="${NSG:-fedfleet-site2-nsg}"; RELAY_RULE_NAME="${RELAY_RULE_NAME:-tailscale-peer-relay}"
+AGG_PUBLIC_IP="${AGG_PUBLIC_IP:-137.23.50.204}"   # the Oracle aggregator (fixed)
 AGG="${AGG:-fedfleet-agg}"; SITE_HOST="${SITE_HOST:-fedfleet-site2}"; SITE_USER="${SITE_USER:-ubuntu}"
+
+if [ "${SKIP_AZ:-0}" != 1 ] && [ "${RELAY_RULE:-1}" != 0 ]; then
+  echo "== peer relay firewall rule: following this Mac's public address"
+  MAC_IP=$(tailscale netcheck 2>/dev/null | sed -nE 's/^[[:space:]]*\* IPv4: yes, ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):[0-9]+.*/\1/p' | head -1 || true)
+  if [ -z "$MAC_IP" ]; then
+    echo "   !! could not read this Mac's public IPv4 from 'tailscale netcheck'; rule left as it is"
+  else
+    want="$AGG_PUBLIC_IP/32 $MAC_IP/32"
+    have=$(az network nsg rule show -g "$RG" --nsg-name "$NSG" -n "$RELAY_RULE_NAME" \
+             --query "sourceAddressPrefixes" -o tsv 2>/dev/null | tr '\t\n' '  ' | xargs -n1 2>/dev/null | sort | xargs || true)
+    if [ "$have" = "$(echo "$want" | xargs -n1 | sort | xargs)" ]; then
+      echo "   already allows $MAC_IP (and the aggregator)"
+    else
+      # shellcheck disable=SC2086  # two prefixes, split on purpose
+      if az network nsg rule update -g "$RG" --nsg-name "$NSG" -n "$RELAY_RULE_NAME" \
+           --source-address-prefixes $want --output none; then
+        echo "   was: ${have:-none}"
+        echo "   now: $want"
+      else
+        echo "   !! could not update the rule; the Mac will use the slower DERP path"
+      fi
+    fi
+  fi
+fi
 
 if [ "${SKIP_AZ:-0}" != 1 ]; then
   echo "== starting Azure VM $VM (resource group $RG)"
@@ -43,5 +75,17 @@ fi
 echo "== starting site 2 on $SITE_HOST"
 ssh -o ConnectTimeout=20 "$SITE_USER@$SITE_HOST" \
   "cd ~/fedfleet && scripts/stop_local.sh >/dev/null; . .venv/bin/activate && scripts/run_sites.sh $AGG 1 3 2"
+
+echo "== Mac -> aggregator path"
+path=$(tailscale ping -c 4 "$AGG" 2>&1 || true)
+if grep -q "via peer-relay" <<<"$path"; then
+  echo "   peer relay: $(grep -m1 -Eo 'via peer-relay[^ ]* in [0-9.]+ms' <<<"$path")"
+elif grep -q "via DERP" <<<"$path"; then
+  echo "   !! public DERP relay ($(grep -m1 -Eo 'via DERP\([a-z]+\) in [0-9.]+ms' <<<"$path")), not the peer relay."
+  echo "      Fine for a quick run; for a measured run check the rule above (a network that sends"
+  echo "      traffic out from more than one public address also defeats it)."
+else
+  echo "   $(tail -1 <<<"$path")"
+fi
 
 echo "== ready. Wait about 15 s for the sites to register, then run flwr run."
