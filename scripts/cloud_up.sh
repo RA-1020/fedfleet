@@ -43,6 +43,10 @@ if [ "${SKIP_AZ:-0}" != 1 ] && [ "${RELAY_RULE:-1}" != 0 ]; then
   fi
 fi
 
+# Tell the elasticity controller this VM is now in a person's hands (it never stops a held VM).
+ssh -o ConnectTimeout=10 "ubuntu@$AGG" 'mkdir -p ~/fedfleet-elastic && touch ~/fedfleet-elastic/hold' 2>/dev/null \
+  || echo "   (could not set the elasticity hold on $AGG; the controller may stop a VM it started)"
+
 if [ "${SKIP_AZ:-0}" != 1 ]; then
   echo "== starting Azure VM $VM (resource group $RG)"
   az vm start -g "$RG" -n "$VM" --output none

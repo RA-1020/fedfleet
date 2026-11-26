@@ -13,7 +13,9 @@ Runs on the Oracle aggregator as fedfleet-elastic.service and checks every TICK_
              the Mac sites, which this controller cannot start).
   scale in   The controller started the VM, nothing is queued, and no run has been active for
              IDLE_S: deallocate it. A VM started by a person (scripts/cloud_up.sh) is never
-             deallocated by the controller; it only counts its minutes.
+             deallocated by the controller; it only counts its minutes. cloud_up.sh also leaves
+             ~/fedfleet-elastic/hold (cloud_down.sh removes it): while it exists the VM is the
+             person's, even if the controller started it, so it is never scaled in.
   cost guard VM minutes are counted whenever the VM is seen running (whoever started it). The
              controller does not start the VM once today's minutes reach BUDGET_MIN (UTC day), and
              it never stops a VM in the middle of a run.
@@ -203,6 +205,11 @@ class Controller:
         st["vm_cost_today"] = round(spent / 60 * RATE_PER_HOUR, 5)
         if power == "deallocated" and st["started_by_controller"]:
             st["started_by_controller"] = False   # someone (or Azure) stopped it
+        held = (self.root / "hold").exists()
+        st["held_by_person"] = held
+        if held and st["started_by_controller"]:
+            st["started_by_controller"] = False   # cloud_up.sh took over the running VM
+            self.event(now, "handed_to_person", power=power)
 
         queue = self.queue()
         up = power in ("running", "starting")

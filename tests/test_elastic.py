@@ -163,3 +163,16 @@ def test_site_that_never_joins_is_flagged_once(tmp_path):
     assert events(tmp_path).count("site_not_joined") == 1 and c.st["site_not_joined"]
     w.online = 3; c.tick(1600)                     # site fixed (within the queue timeout): the run goes out
     assert w.posted and events(tmp_path)[-1] == "run_dispatched"
+
+
+def test_hold_hands_a_controller_started_vm_to_the_person(tmp_path):
+    # 26 Nov: cloud_up.sh found the controller's VM still running and used it by hand; without a
+    # hand-over the controller could have deallocated it 10 min later.
+    c, az, w = make(tmp_path)
+    queue(tmp_path)
+    c.tick(1000); az.p = "running"; w.online = 3; c.tick(1060)       # scale out, dispatch
+    assert c.st["started_by_controller"]
+    (tmp_path / "hold").touch()                                        # cloud_up.sh
+    for t in range(1080, 4000, 20):
+        c.tick(t)
+    assert az.calls == ["start"] and "handed_to_person" in events(tmp_path)

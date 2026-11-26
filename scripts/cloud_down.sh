@@ -29,6 +29,9 @@ if [ "${SKIP_AZ:-0}" != 1 ]; then
   fi
 fi
 
+# Hand the VM back to the elasticity controller (it is deallocated now).
+ssh -o ConnectTimeout=10 "ubuntu@${AGG:-fedfleet-agg}" 'rm -f ~/fedfleet-elastic/hold' 2>/dev/null || true
+
 echo "== stopping the Mac sites"
 scripts/stop_local.sh
 
