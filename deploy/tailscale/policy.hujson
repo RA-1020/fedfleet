@@ -1,7 +1,7 @@
 // FedFleet tailnet policy (Tailscale admin console > Access controls > JSON editor).
 // This file is the source of truth: change it here, review it, then paste it into the editor.
 // Saving runs the tests below; a change that breaks them is refused.
-// Live since 24 Nov 2026. Rollback: add {"src": ["*"], "dst": ["*"], "ip": ["*"]} as the
+// Live since 24 Nov 2026; Hashim's SSH rule added 27 Nov 2026. Rollback: add {"src": ["*"], "dst": ["*"], "ip": ["*"]} as the
 // first grant (allow-all) and save.
 {
 	"tagOwners": {
@@ -46,6 +46,15 @@
 			"dst":    ["tag:aggregator", "tag:site"],
 			"users":  ["autogroup:nonroot", "root"],
 		},
+		// Hashim (Kubernetes work, Phase 2): his own local user on the aggregator only, never
+		// ubuntu or root. sudo, if needed for the k3s install, is granted on the machine for the
+		// agreed slot and removed afterwards; this rule does not give it.
+		{
+			"action": "check",
+			"src":    ["Hashim-Mughal@github"],
+			"dst":    ["tag:aggregator"],
+			"users":  ["hashim"],
+		},
 	],
 
 	"tests": [
@@ -57,10 +66,15 @@
 		// The aggregator cannot open connections to the Mac.
 		{"src": "tag:aggregator", "deny": ["100.115.211.106:22"]},
 		// The owner keeps everything FedFleet uses.
+		// Hashim reaches the aggregator's SSH and nothing else of FedFleet.
+		{"src": "Hashim-Mughal@github", "accept": ["tag:aggregator:22"], "deny": ["tag:aggregator:9092", "tag:aggregator:8000", "tag:aggregator:3000", "tag:aggregator:9090", "100.127.25.47:22", "100.115.211.106:22"]},
 		{"src": "RA-1020@github", "accept": ["tag:aggregator:22", "tag:aggregator:9092", "tag:aggregator:8000", "tag:aggregator:3000", "tag:aggregator:9090", "100.127.25.47:22"]},
 	],
 
 	"sshTests": [
 		{"src": "RA-1020@github", "dst": ["tag:aggregator"], "check": ["ubuntu"]},
+		// Hashim logs in only as hashim, and never to the Azure site.
+		{"src": "Hashim-Mughal@github", "dst": ["tag:aggregator"], "check": ["hashim"], "deny": ["ubuntu", "root"]},
+		{"src": "Hashim-Mughal@github", "dst": ["tag:site"], "deny": ["ubuntu", "hashim", "root"]},
 	],
 }
