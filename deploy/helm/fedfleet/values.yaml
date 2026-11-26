@@ -1,0 +1,30 @@
+image:
+  repository: fedfleet
+  tag: dev
+  pullPolicy: IfNotPresent   # the dev image is imported into k3d, never pulled
+
+tls:
+  enabled: false             # values-tls.yaml turns it on
+  serverSecret: superlink-tls
+
+superlink:
+  nodeSelector:
+    fedfleet.io/role: control
+  persistence:
+    size: 1Gi
+    storageClass: local-path
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: 500m, memory: 1Gi }
+
+numPartitions: 3
+sites:
+  - name: site0
+    partitionId: 0
+    nodeSelector: { fedfleet.io/site: site0 }
+  - name: site1
+    partitionId: 1
+    nodeSelector: { fedfleet.io/site: site1 }
+  - name: site2
+    partitionId: 2
+    nodeSelector: { fedfleet.io/site: site2 }

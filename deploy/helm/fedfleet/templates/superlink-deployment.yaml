@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-superlink
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # two SuperLinks on one database must never run at once
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: superlink
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: superlink
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      nodeSelector:
+        {{- toYaml .Values.superlink.nodeSelector | nindent 8 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: superlink
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["flower-superlink"]
+          args:
+            {{- if .Values.tls.enabled }}
+            - --ssl-certfile=/tls/server.pem
+            - --ssl-keyfile=/tls/server.key
+            - --ssl-ca-certfile=/tls/ca.pem
+            - --enable-supernode-auth
+            {{- else }}
+            - --insecure
+            {{- end }}
+            - --host=0.0.0.0
+            - --fleet-api-address=0.0.0.0:9092
+            - --database=/state/state.db
+          env:
+            - { name: FLWR_DISABLE_RUNTIME_DEPENDENCY_INSTALLATION, value: "1" }
+            - { name: FLWR_HOME, value: /flwr-home }
+            - { name: HOME, value: /tmp }
+          ports:
+            - { name: control, containerPort: 8000 }
+            - { name: fleet, containerPort: 9092 }
+          readinessProbe:
+            tcpSocket: { port: 9092 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 9092 }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.superlink.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: state, mountPath: /state }
+            - { name: tmp, mountPath: /tmp }
+            - { name: flwr-home, mountPath: /flwr-home }
+            {{- if .Values.tls.enabled }}
+            - { name: tls, mountPath: /tls, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-superlink-state
+        - { name: tmp, emptyDir: {} }
+        - { name: flwr-home, emptyDir: {} }
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.serverSecret }}
+            defaultMode: 0440
+        {{- end }}
