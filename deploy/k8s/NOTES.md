@@ -1,0 +1,1 @@
+- 2026-11-26: dev-cluster.sh builds the labelled k3d cluster: first run 3m23s (image pulls), rebuild 33s. Practised pod delete (Deployment recreates pods), drain/uncordon of agent-0, cluster rebuild. After a Docker/WSL restart the cluster came back by itself with labels intact. Findings: image runs as root (no USER in Dockerfile); SuperLink TLS cert has no in-cluster name.
