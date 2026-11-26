@@ -59,9 +59,3 @@ secagg-clipping-range = 8.0 # SecAgg+ clips each weighted parameter to +-this be
 # CI starts with the rules that catch real bugs; style rules get added later, one at a time.
 select = ["E9", "F"]
 
-[tool.ruff.lint.per-file-ignores]
-# Found by the first lint run; reported to Rohaan, each to be fixed or accepted in its own PR.
-"fedfleet/client_app.py" = ["F841"]       # application code: not changed in the CI PR
-"scripts/export_model.py" = ["F541"]
-"tests/test_report.py" = ["F541"]
-"tests/test_strategy_dp.py" = ["F401"]

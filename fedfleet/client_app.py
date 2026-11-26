@@ -87,8 +87,9 @@ def _secagg_train(msg: Message, context: Context) -> Message:
     setup_seconds = time.perf_counter() - t_setup
     _reseed(cfg, msg, context, int(fitins.config.get("server-round", 0)))
     t0 = time.perf_counter()
-    loss = train(model, trainloader, int(cfg["local-epochs"]), float(cfg["lr"]),
-                 head_only, pick_device())
+    # The training loss is not reported under SecAgg+ (it would leave the site unmasked).
+    train(model, trainloader, int(cfg["local-epochs"]), float(cfg["lr"]),
+          head_only, pick_device())
     model.to("cpu")
     trained = [part.state_dict()[k].detach().numpy() for k in keys]
     norm = float(np.sqrt(sum(float(np.sum((t.astype(np.float64) - r.astype(np.float64)) ** 2))

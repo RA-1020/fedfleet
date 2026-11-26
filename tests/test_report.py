@@ -118,7 +118,7 @@ def test_old_run_is_costed_from_rate_card():
 
 def test_build_report_against_mock_blob():
     srv = serve()
-    url = f"https://x/c?sv=1&sig=abc"          # shape check only; the real URL is http://127.0.0.1 below
+    url = "https://x/c?sv=1&sig=abc"          # shape check only; the real URL is http://127.0.0.1 below
     fr.split_sas(url)
     base = f"http://127.0.0.1:{srv.server_port}/c"
     # split_sas insists on https, so call the lower layers the same way build_report does
