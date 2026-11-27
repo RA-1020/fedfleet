@@ -214,6 +214,9 @@ class RunRequest(BaseModel):
                                      "before a round would take epsilon past it; needs dp and noise above 0; "
                                      "fixed for the life of a run")
     secagg: bool = Field(False, description="secure aggregation (SecAgg+); works with dp, not with compression")
+    chaos_secagg_drop: str = Field("", pattern=r"^([0-9]{1,2}:[0-9]{1,4})?$",
+                                   description="drill only, needs secagg: '<site>:<round>' makes that site "
+                                               "drop out of that round after sharing its keys; empty = off")
     wait_for_sites: bool = Field(False, description="if too few sites are online, queue the run instead of "
                                                     "refusing it; the elasticity controller starts the Azure "
                                                     "site and starts the run once enough sites are online")
@@ -300,6 +303,7 @@ def _run_config(req: RunRequest, metrics_dir: str) -> str:
         "dp-clip-norm": req.dp_clip_norm, "dp-delta": req.dp_delta,
         "dp-max-epsilon": req.dp_max_epsilon,
         "resume": req.resume, "secagg": req.secagg,
+        "chaos-secagg-drop": req.chaos_secagg_drop,
     }
 
     def val(v):
@@ -333,6 +337,8 @@ def _start_run(req: RunRequest, request: Request) -> dict:
     request.state.audit = {"run": req.name, "request": req.model_dump()}
     if not RUN_NAME.match(req.name):
         raise HTTPException(422, "name must be 1-40 lower-case letters, digits or hyphens")
+    if req.chaos_secagg_drop and not req.secagg:
+        raise HTTPException(422, "chaos_secagg_drop is a SecAgg+ drill; it needs secagg=true")
     if req.secagg and req.compression != "none":
         raise HTTPException(422, "secagg cannot be combined with compression: SecAgg+ quantises "
                                  "updates itself, and masked values do not compress")
