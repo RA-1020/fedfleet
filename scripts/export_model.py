@@ -94,7 +94,7 @@ def card(run: Path, rows: list[dict], mode: str, n_params: int, n_exchanged: int
         "and exchanged; site data never left the sites.",
         f"- Rounds: {len(train)}; sites replying in the last round: {last.get('nodes_replied', '?')}"
         f"/{last.get('nodes_asked', '?')}; update compression: {last.get('compression', 'none')}.",
-        f"- Data: RadioML 2016.10a, split across sites with a Dirichlet(0.5) non-IID partition; "
+        "- Data: RadioML 2016.10a, split across sites with a Dirichlet(0.5) non-IID partition; "
         "evaluation on a fixed public test split held out from sites and backbone pre-training.",
         f"- Global accuracy on the public test split: {first.get('global_acc', float('nan')):.4f} before "
         f"training, {last.get('global_acc', float('nan')):.4f} after the last round.",

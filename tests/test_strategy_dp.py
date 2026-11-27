@@ -18,7 +18,7 @@ except ImportError:                       # comms.py imports torch only for chec
     _stub.Tensor = type("Tensor", (), {})   # SciPy (used by the accountant) probes torch.Tensor
     sys.modules["torch"] = _stub
 
-from flwr.app import Array, ArrayRecord, ConfigRecord, Message, MetricRecord, RecordDict  # noqa: E402
+from flwr.app import Array, ArrayRecord, Message, MetricRecord, RecordDict  # noqa: E402
 from flwr.supercore.task_identity import TaskIdentity  # noqa: E402
 
 from fedfleet.comms import DP_FRACTION, CommsFedAvg  # noqa: E402

@@ -2,12 +2,13 @@
 # Start:  docker compose -f deploy/local/docker-compose.yml up --build
 # Train:  flwr run . fedfleet-docker --stream      (from the repo root, on your Mac)
 # Data:   put RML2016.10a_dict.pkl in ./data and pass data-path="/data/RML2016.10a_dict.pkl"
+# The containers run as uid 10001: on Linux, make ./runs writable for it (chmod 777 runs, or chown 10001).
 services:
   superlink:
     build: { context: ../.., dockerfile: deploy/local/Dockerfile }
     command: ["flower-superlink", "--insecure", "--host", "0.0.0.0"]
     ports: ["8000:8000", "9092:9092"]
-    volumes: ["../../runs:/root/fedfleet-runs", "../../data:/data:ro"]
+    volumes: ["../../runs:/home/fedfleet/fedfleet-runs", "../../data:/data:ro"]
 
   supernode-0:
     build: { context: ../.., dockerfile: deploy/local/Dockerfile }
