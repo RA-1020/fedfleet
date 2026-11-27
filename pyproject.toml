@@ -54,6 +54,7 @@ dp-max-epsilon = 0.0     # > 0: stop before a round would take epsilon past this
 secagg = false              # secure aggregation (SecAgg+, fedfleet/secagg.py); works with dp, not with compression
 secagg-max-weight = 60000.0 # at least the largest site's sample count (weights are num_examples / this)
 secagg-clipping-range = 8.0 # SecAgg+ clips each weighted parameter to +-this before quantising
+chaos-secagg-drop = ""       # drill only: "<site>:<round>" makes that site drop out of that SecAgg+ round after key sharing; empty = off
 
 [tool.ruff.lint]
 # CI starts with the rules that catch real bugs; style rules get added later, one at a time.

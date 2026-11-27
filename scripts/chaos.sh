@@ -31,6 +31,22 @@
 #       aggregator's site list until the Azure site is online again and reports how long that took
 #       (a silent site goes offline and back online by heartbeat, which Flower does not log).
 #
+#   scripts/chaos.sh stop-site <name> [--rounds 10] [--after 2] [--seconds 90]
+#       A site process dies instead of its network: same run settings as partition, then the Azure
+#       site's service (fedfleet-site) is stopped; a timer on the VM, scheduled first, starts it
+#       again after <seconds>. A restarted site may register under a new node id, so the drill
+#       waits for three sites online, not for the old id.
+#
+#   scripts/chaos.sh cpu <name> [--rounds 12] [--after 2] [--seconds 150] [--workers N]
+#       A slow site: same run settings as partition, then busy loops on the Azure VM (N, default
+#       one per CPU) compete with its training for <seconds>. systemd ends them at that limit
+#       (RuntimeMaxSec), whatever happens to this script. Reports rounds before, during, after.
+#
+#   scripts/chaos.sh secagg-drop <name> [--rounds 5] [--drop-round 3]
+#       SecAgg+ run, 3 sites; in round <drop-round> site 2 drops out after sharing its keys
+#       (the run setting chaos_secagg_drop): SecAgg+ must unmask the other two from the shares
+#       and the round must still be aggregated. Needs the control API with chaos_secagg_drop.
+#
 # --secagg runs either drill under secure aggregation (SecAgg+): a partition then tests a site
 # dropping out of the protocol (two of three key shares are enough to unmask), a kill tests a
 # crash and resume of a SecAgg+ run. Both print a timeline and the per-round table at the end. Start the sites first
@@ -44,13 +60,13 @@ FLOWER_PORT="${FLOWER_PORT:-9092}"            # the port sites connect to
 GATEWAY="${GATEWAY:-https://fedfleet-gateway.fedfleet-ra.workers.dev}"
 TOKEN_FILE="${TOKEN_FILE:-$HOME/.fedfleet-api-token}"
 
-usage() { sed -n '3,32p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '3,50p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 MODE="${1:-}"; NAME="${2:-}"
-[[ "$MODE" == kill || "$MODE" == partition || "$MODE" == delay ]] || usage
+[[ "$MODE" =~ ^(kill|partition|delay|stop-site|cpu|secagg-drop)$ ]] || usage
 [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] || { echo "name: 1-40 lower-case letters, digits or hyphens"; exit 1; }
 shift 2
 ROUNDS=""; AFTER=""; DP_NOISE=""; SECONDS_CUT=""; YES=0; SECAGG=0
-DELAY_MS=200; JITTER_MS=50; LOSS=2; AUTO=0
+DELAY_MS=200; JITTER_MS=50; LOSS=2; AUTO=0; WORKERS=0; DROP_ROUND=3
 while [ $# -gt 0 ]; do
   case "$1" in
     --rounds) ROUNDS="$2"; shift 2 ;;
@@ -63,13 +79,15 @@ while [ $# -gt 0 ]; do
     --yes) YES=1; shift ;;
     --secagg) SECAGG=1; shift ;;
     --auto) AUTO=1; shift ;;
+    --workers) WORKERS="$2"; shift 2 ;;
+    --drop-round) DROP_ROUND="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
-[ -n "$AFTER" ] || { [ "$MODE" = kill ] && AFTER=3 || AFTER=2; }
-[ -n "$ROUNDS" ] || case "$MODE" in kill) ROUNDS=6 ;; delay) ROUNDS=12 ;; *) ROUNDS=10 ;; esac
-[ -n "$SECONDS_CUT" ] || { [ "$MODE" = delay ] && SECONDS_CUT=150 || SECONDS_CUT=90; }
-for v in "$ROUNDS" "$AFTER" "$SECONDS_CUT" "$DELAY_MS" "$JITTER_MS"; do [[ "$v" =~ ^[0-9]+$ ]] || { echo "numbers only: $v"; exit 1; }; done
+[ -n "$AFTER" ] || case "$MODE" in kill) AFTER=3 ;; secagg-drop) AFTER=1 ;; *) AFTER=2 ;; esac
+[ -n "$ROUNDS" ] || case "$MODE" in kill) ROUNDS=6 ;; delay|cpu) ROUNDS=12 ;; secagg-drop) ROUNDS=5 ;; *) ROUNDS=10 ;; esac
+[ -n "$SECONDS_CUT" ] || case "$MODE" in delay|cpu) SECONDS_CUT=150 ;; *) SECONDS_CUT=90 ;; esac
+for v in "$ROUNDS" "$AFTER" "$SECONDS_CUT" "$DELAY_MS" "$JITTER_MS" "$WORKERS" "$DROP_ROUND"; do [[ "$v" =~ ^[0-9]+$ ]] || { echo "numbers only: $v"; exit 1; }; done
 [ "$AFTER" -lt "$ROUNDS" ] || { echo "--after must be below --rounds"; exit 1; }
 [[ "$LOSS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "--loss: a percentage"; exit 1; }
 python3 -c "import sys; sys.exit(0 if float('$LOSS') <= 50 else 1)" || { echo "--loss: at most 50"; exit 1; }
@@ -77,6 +95,8 @@ python3 -c "import sys; sys.exit(0 if float('$LOSS') <= 50 else 1)" || { echo "-
 [ -z "$DP_NOISE" ] || [[ "$DP_NOISE" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "--dp-noise: a number"; exit 1; }
 [ "$MODE" != kill ] && [ -n "$DP_NOISE" ] && { echo "--dp-noise is for kill only (a DP run skips rounds with a missing site)"; exit 1; }
 [ "$MODE" != kill ] && [ "$AUTO" = 1 ] && { echo "--auto is for kill only"; exit 1; }
+[ "$MODE" = secagg-drop ] && { [ "$DROP_ROUND" -ge 1 ] && [ "$DROP_ROUND" -le "$ROUNDS" ] || { echo "--drop-round must be within the run's rounds"; exit 1; }; }
+[ "$WORKERS" -le 16 ] || { echo "--workers: at most 16"; exit 1; }
 [ "$MODE" = kill ] && [ "$YES" != 1 ] && { echo "kill stops the aggregator; add --yes to confirm"; exit 1; }
 [ -r "$TOKEN_FILE" ] || { echo "no API token at $TOKEN_FILE"; exit 1; }
 
@@ -146,6 +166,8 @@ DP_JSON=""
 if [ "$MODE" = kill ]; then
   # Without --auto the drill resumes by itself, so the watchdog must stay out of it.
   BODY="{\"name\":\"$NAME\",\"rounds\":$ROUNDS,\"min_nodes\":3,\"auto_resume\":$([ "$AUTO" = 1 ] && echo true || echo false)$DP_JSON}"
+elif [ "$MODE" = secagg-drop ]; then
+  BODY="{\"name\":\"$NAME\",\"rounds\":$ROUNDS,\"min_nodes\":3,\"secagg\":true,\"chaos_secagg_drop\":\"2:$DROP_ROUND\"}"
 else
   BODY="{\"name\":\"$NAME\",\"rounds\":$ROUNDS,\"min_nodes\":2,\"round_timeout\":60$DP_JSON}"
 fi
@@ -200,7 +222,7 @@ if [ "$MODE" = kill ]; then
     [ "$ok" = 1 ] || { echo "!! resume was refused for 3 min"; exit 1; }
     echo "   resume accepted +$(python3 -c "print(f'{$(agg_now) - $T_KILL:.1f}')") s after the kill (first try at +$(python3 -c "print(f'{$T_RESUME - $T_KILL:.1f}')") s)"
   fi
-else
+elif [ "$MODE" != secagg-drop ]; then
   # shellcheck disable=SC2029
   SITE_NODE=$(ssh "ubuntu@$AGG" "cat ~/fedfleet-runs-$NAME/rounds.jsonl" | python3 -c '
 import json, sys
@@ -248,6 +270,45 @@ if [ "$MODE" = delay ]; then
   else
     echo "   healed: back to the default qdisc"
   fi
+elif [ "$MODE" = stop-site ]; then
+  # shellcheck disable=SC2029
+  ssh "ubuntu@$SITE" "systemctl cat fedfleet-site >/dev/null 2>&1" || { echo "!! fedfleet-site is not installed on $SITE (deploy/site/)"; exit 1; }
+  echo "== stopping site 2 (fedfleet-site on $SITE) for $SECONDS_CUT s (restart is scheduled on the VM first)"
+  # shellcheck disable=SC2029  # all values were checked above
+  T_CUT=$(ssh "ubuntu@$SITE" "sudo systemd-run --quiet --unit fedfleet-chaos-heal-$STAMP --on-active=${SECONDS_CUT}s /usr/bin/systemctl start fedfleet-site \
+          && sudo systemctl stop fedfleet-site && date +%s.%N") || { echo "!! could not stop the site"; exit 1; }
+  echo "   stopped at $T_CUT (Azure VM clock), restarts at about +$SECONDS_CUT s"
+  sleep "$SECONDS_CUT"; sleep 3
+  if ssh "ubuntu@$SITE" "systemctl is-active --quiet fedfleet-site"; then
+    echo "   healed: fedfleet-site is running again"
+  else
+    echo "!! fedfleet-site is not running; starting it now"
+    ssh "ubuntu@$SITE" "sudo systemctl start fedfleet-site"
+  fi
+  echo "== waiting for the aggregator to list 3 sites online again (up to 5 min)"
+  T_BACK=$(wait_online count 3 300) || { echo "!! fewer than 3 sites online 5 min after the restart"; T_BACK=""; }
+  [ -n "$T_BACK" ] && echo "   3 sites online again at $T_BACK"
+elif [ "$MODE" = cpu ]; then
+  echo "== loading the CPUs of $SITE for $SECONDS_CUT s ($([ "$WORKERS" -gt 0 ] && echo "$WORKERS busy loops" || echo "one busy loop per CPU"); systemd stops them at the limit)"
+  # shellcheck disable=SC2029,SC2016  # values were checked above; \$ expands on the VM
+  T_CUT=$(ssh "ubuntu@$SITE" "sudo systemd-run --quiet --unit fedfleet-chaos-cpu-$STAMP --property=RuntimeMaxSec=${SECONDS_CUT} \
+          /bin/sh -c 'n=$WORKERS; [ \$n -gt 0 ] || n=\$(nproc); i=0; while [ \$i -lt \$n ]; do yes > /dev/null & i=\$((i+1)); done; wait' \
+          && date +%s.%N") || { echo "!! could not start the load"; exit 1; }
+  echo "   loaded at $T_CUT (Azure VM clock), ends at about +$SECONDS_CUT s"
+  sleep $(( SECONDS_CUT / 2 ))
+  LOAD_MID=$(ssh "ubuntu@$SITE" "echo \"load \$(cut -d' ' -f1 /proc/loadavg) on \$(nproc) CPUs\"")
+  echo "   halfway: $LOAD_MID"
+  sleep $(( SECONDS_CUT - SECONDS_CUT / 2 )); sleep 3
+  # shellcheck disable=SC2029
+  if ssh "ubuntu@$SITE" "systemctl is-active --quiet fedfleet-chaos-cpu-$STAMP"; then
+    echo "!! the load is still running; stopping it now"
+    # shellcheck disable=SC2029
+    ssh "ubuntu@$SITE" "sudo systemctl stop fedfleet-chaos-cpu-$STAMP"
+  else
+    echo "   healed: the load has ended"
+  fi
+  left=$(ssh "ubuntu@$SITE" "pgrep -c -x yes || true")
+  [ "${left:-0}" = 0 ] || echo "!! $left busy loops still running on $SITE; stop them with: ssh ubuntu@$SITE 'pkill -x yes'"
 elif [ "$MODE" = partition ]; then
   echo "== cutting $SITE off from the aggregator for $SECONDS_CUT s (heal is scheduled on the VM first)"
   # shellcheck disable=SC2029  # all values were checked above
@@ -311,12 +372,27 @@ for r in rows:
     print("   round %s: %s/%s replied, sites %s, %.1f s, accuracy %.4f%s%s" % (
         r["round"], r.get("nodes_replied"), r.get("nodes_asked"), site_ids(r),
         r["train_round_seconds"], r["global_acc"], eps, note))
+if os.environ.get("MODE") == "secagg-drop":
+    trained = [r for r in rows if "train_round_seconds" in r]
+    d = int(os.environ.get("DROP_ROUND", "0"))
+    r = next((x for x in trained if x["round"] == d), None)
+    if r is None:
+        print("   round %d not logged" % d)
+    else:
+        sa = r.get("secagg") or {}
+        print("   drop round %d: %s/%s replied, sites %s, aggregated %s; SecAgg+ %s" % (
+            d, r.get("nodes_replied"), r.get("nodes_asked"), site_ids(r),
+            sa.get("aggregated", r.get("aggregated")),
+            "recovered from the dropout" if sa.get("aggregated", r.get("aggregated")) and 2 not in site_ids(r)
+            else "did NOT recover as expected"))
+        later = [x for x in trained if x["round"] > d]
+        print("   later rounds with site 2 back: %s" % ([x["round"] for x in later if 2 in site_ids(x)] or "none"))
 if kill:
     print("   aggregator back %.1f s after the kill; resume %s at +%.1f s" % (
         up - kill, "started by the watchdog" if os.environ.get("AUTO") == "1" else "first requested", resume - kill))
     if sites_up:
         print("   all 3 sites online %.1f s after the kill" % (sites_up - kill))
-if cut and os.environ.get("MODE") == "delay":
+if cut and os.environ.get("MODE") in ("delay", "cpu"):
     trained = [r for r in rows if "train_round_seconds" in r]
     phases = {"before": [], "during": [], "after": []}
     for r in trained:
@@ -330,9 +406,12 @@ if cut and os.environ.get("MODE") == "delay":
         with2 = sum(1 for r in rs if 2 in site_ids(r))
         print("   %s: rounds %s, mean %.1f s, max %.1f s, site 2 in %d of %d" % (
             p, [r["round"] for r in rs], sum(secs) / len(secs), max(secs), with2, len(rs)))
-    print("   impairment: %s" % os.environ.get("NETEM", ""))
-    print("   netem counters halfway: %s" % (os.environ.get("NETEM_MID") or "none"))
-    print("   Mac -> aggregator path halfway: %s" % (os.environ.get("PATH_MID") or "unknown"))
+    if os.environ.get("MODE") == "delay":
+        print("   impairment: %s" % os.environ.get("NETEM", ""))
+        print("   netem counters halfway: %s" % (os.environ.get("NETEM_MID") or "none"))
+        print("   Mac -> aggregator path halfway: %s" % (os.environ.get("PATH_MID") or "unknown"))
+    else:
+        print("   CPU load halfway: %s" % (os.environ.get("LOAD_MID") or "not read"))
     skipped = [r["round"] for r in trained if r.get("aggregated") is False]
     print("   rounds not aggregated (too few replies): %s" % (skipped or "none"))
 elif cut:
@@ -350,4 +429,4 @@ PY
 # shellcheck disable=SC2029
 ssh "ubuntu@$AGG" "cat ~/fedfleet-runs-$NAME/rounds.jsonl" | \
   T_KILL="${T_KILL:-}" T_UP="${T_UP:-}" T_SITES="${T_SITES:-}" T_RESUME="${T_RESUME:-}" T_CUT="${T_CUT:-}" \
-  T_BACK="${T_BACK:-}" CUT="$SECONDS_CUT" MODE="$MODE" AUTO="$AUTO" NETEM="${NETEM:-}" NETEM_MID="${NETEM_MID:-}" PATH_MID="${PATH_MID:-}" python3 "$REPORT"
+  T_BACK="${T_BACK:-}" CUT="$SECONDS_CUT" MODE="$MODE" AUTO="$AUTO" NETEM="${NETEM:-}" NETEM_MID="${NETEM_MID:-}" PATH_MID="${PATH_MID:-}" LOAD_MID="${LOAD_MID:-}" DROP_ROUND="$DROP_ROUND" python3 "$REPORT"

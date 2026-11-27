@@ -20,7 +20,7 @@ import os
 import re
 import statistics
 
-DRILL = re.compile(r"(part|kill|crash|res-eu|nosites|drop|chaos|delay)")
+DRILL = re.compile(r"(part|kill|crash|res-eu|nosites|drop|chaos|delay|stop|cpu)")
 
 # (name, target, unit) - the numbers D2 states as FedFleet's objectives.
 ROUND_PLAIN_S = 60.0     # 95% of plain rounds within this

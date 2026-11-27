@@ -14,7 +14,7 @@ from flwr.app import Array, ArrayRecord, Context, Message, MetricRecord, RecordD
 from flwr.clientapp import ClientApp
 from flwr.client.mod import secaggplus_mod
 from flwr.common import Code, FitRes, Status, ndarrays_to_parameters, parameters_to_ndarrays
-from flwr.common.secure_aggregation.secaggplus_constants import RECORD_KEY_CONFIGS
+from flwr.common.secure_aggregation.secaggplus_constants import RECORD_KEY_CONFIGS, Key, Stage
 from flwr.compat.common import recorddict_compat as compat
 
 from fedfleet.compress import clip_update, compress, update_norm
@@ -120,6 +120,23 @@ def _secagg_train(msg: Message, context: Context) -> Message:
     return Message(compat.fitres_to_recorddict(fitres, keep_input=True), reply_to=msg)
 
 
+def _chaos_secagg_drop(msg: Message, context: Context) -> bool:
+    """True if this message is the masked-vector stage that the drop drill targets."""
+    run_config = getattr(context, "run_config", None) or {}
+    target = str(run_config.get("chaos-secagg-drop", "") or "").strip()
+    if not target:
+        return False
+    try:
+        site, rnd = (int(x) for x in target.split(":"))
+    except ValueError:
+        return False                      # malformed: never inject a fault by accident
+    stage = msg.content.config_records[RECORD_KEY_CONFIGS].get(Key.STAGE)
+    fit_cfg = msg.content.config_records.get("fitins.config")
+    this_round = int(fit_cfg.get("server-round", -1)) if fit_cfg is not None else -1
+    this_site = int(context.node_config.get("partition-id", -1))
+    return stage == Stage.COLLECT_MASKED_VECTORS and this_site == site and this_round == rnd
+
+
 def secagg_switch(msg: Message, context: Context, call_next) -> Message:
     """Hand SecAgg+ rounds to Flower's secaggplus_mod; leave every other message alone.
 
@@ -127,6 +144,12 @@ def secagg_switch(msg: Message, context: Context, call_next) -> Message:
     with the protocol's config record; only the masked-vector stage trains (_secagg_train).
     """
     if RECORD_KEY_CONFIGS in msg.content.config_records:
+        if _chaos_secagg_drop(msg, context):
+            # Fault injection for the drop-after-key-sharing drill (run config
+            # chaos-secagg-drop = "<site>:<round>"; empty = off): this site has already sent its
+            # key shares and now fails at the masked-vector stage, exactly as a site that crashes
+            # mid-round. Flower records the error as a dropout and SecAgg+ must recover.
+            raise RuntimeError("chaos: site dropping out after key sharing (chaos-secagg-drop)")
         out = secaggplus_mod(msg, context, _secagg_train)
         # Flower 1.38 returns the masked-vector stage's reply with the site's FitRes beside the
         # masked vector, including num_examples in clear text. The weight is already inside
