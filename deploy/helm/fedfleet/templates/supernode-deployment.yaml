@@ -1,0 +1,67 @@
+{{- range .Values.sites }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $.Release.Name }}-supernode-{{ .name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: supernode
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      fedfleet.io/site: {{ .name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: supernode
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+        fedfleet.io/site: {{ .name }}
+    spec:
+      nodeSelector:
+        {{- toYaml .nodeSelector | nindent 8 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: supernode
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command: ["flower-supernode"]
+          args:
+            {{- if $.Values.tls.enabled }}
+            - --root-certificates=/tls/ca.pem
+            - --auth-supernode-private-key=/tls/site.key
+            {{- else }}
+            - --insecure
+            {{- end }}
+            - --superlink={{ $.Release.Name }}-superlink:9092
+            - --node-config=partition-id={{ .partitionId }} num-partitions={{ $.Values.numPartitions }}
+          env:
+            - { name: FLWR_DISABLE_RUNTIME_DEPENDENCY_INSTALLATION, value: "1" }
+            - { name: FLWR_HOME, value: /flwr-home }
+            - { name: HOME, value: /tmp }
+          resources:
+            {{- toYaml (default $.Values.supernode.resources .resources) | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: flwr-home, mountPath: /flwr-home }
+            {{- if $.Values.tls.enabled }}
+            - { name: tls, mountPath: /tls, readOnly: true }
+            {{- end }}
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        - { name: flwr-home, emptyDir: {} }
+        {{- if $.Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ default (printf "site-%d-auth" (int .partitionId)) .tlsSecret }}
+            defaultMode: 0440
+        {{- end }}
+{{- end }}

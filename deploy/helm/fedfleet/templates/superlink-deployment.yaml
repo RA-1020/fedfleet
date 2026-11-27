@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-superlink
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # two SuperLinks on one database must never run at once
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: superlink
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: superlink
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      nodeSelector:
+        {{- toYaml .Values.superlink.nodeSelector | nindent 8 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: superlink
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["flower-superlink"]
+          args:
+            {{- if .Values.tls.enabled }}
+            - --ssl-certfile=/tls/server.pem
+            - --ssl-keyfile=/tls/server.key
+            - --ssl-ca-certfile=/tls/ca.pem
+            - --enable-supernode-auth
+            {{- else }}
+            - --insecure
+            {{- end }}
+            - --host=0.0.0.0
+            - --fleet-api-address=0.0.0.0:9092
+            - --database=/state/state.db
+          env:
+            - { name: FLWR_DISABLE_RUNTIME_DEPENDENCY_INSTALLATION, value: "1" }
+            - { name: FLWR_HOME, value: /flwr-home }
+            # The ServerApp runs inside this pod and writes each run (metrics, checkpoints) to
+            # $HOME/fedfleet-runs; HOME is on its own volume so a restart keeps them and a
+            # crashed run can resume from its checkpoint.
+            - { name: HOME, value: /home/fedfleet }
+          ports:
+            - { name: control, containerPort: 8000 }
+            - { name: fleet, containerPort: 9092 }
+          # Probes run inside the container, so the NetworkPolicy (which only admits sites and
+          # the submit Job) cannot block them.
+          readinessProbe:
+            exec: { command: ["python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9092), 3)"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9092), 3)"] }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.superlink.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: state, mountPath: /state }
+            - { name: runs, mountPath: /home/fedfleet }
+            - { name: tmp, mountPath: /tmp }
+            - { name: flwr-home, mountPath: /flwr-home }
+            {{- if .Values.tls.enabled }}
+            - { name: tls, mountPath: /tls, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-superlink-state
+        - name: runs
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-superlink-runs
+        - { name: tmp, emptyDir: {} }
+        - { name: flwr-home, emptyDir: {} }
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.serverSecret }}
+            defaultMode: 0440
+        {{- end }}

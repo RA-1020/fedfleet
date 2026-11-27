@@ -1,0 +1,70 @@
+# Submit a FedFleet run from inside the cluster:
+#   kubectl apply -f deploy/k8s/submit-job.yaml
+#   kubectl -n fedfleet-test logs -f job/fedfleet-run
+# Run again: kubectl -n fedfleet-test delete job fedfleet-run, then apply.
+# The Job succeeds only if the run itself ends finished:completed: it starts the run without
+# --stream (whose exit only means the log stream ended) and then polls `flwr ls` for the status.
+# Change ROUNDS / RUN_CONFIG below. Assumes release "fft" in namespace fedfleet-test, insecure.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fedfleet-run
+  namespace: fedfleet-test
+spec:
+  backoffLimit: 0                  # a failed run is not retried by itself
+  activeDeadlineSeconds: 14400     # a run still going after 4 h fails the Job
+  ttlSecondsAfterFinished: 86400   # cleaned up after a day
+  template:
+    metadata:
+      labels:
+        fedfleet.io/may-submit: "true"   # admitted to the SuperLink's control port (NetworkPolicy)
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: flwr-run
+          image: fedfleet:dev
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              mkdir -p "$FLWR_HOME"
+              printf '[superlink.fedfleet-k8s]\naddress = "fft-superlink:8000"\ninsecure = true\n' > "$FLWR_HOME/config.toml"
+              out=$(flwr run . fedfleet-k8s --run-config "$RUN_CONFIG" 2>&1) || { echo "$out"; exit 1; }
+              echo "$out"
+              run_id=$(echo "$out" | sed -n 's/.*Successfully started run \([0-9][0-9]*\).*/\1/p' | head -1)
+              [ -n "$run_id" ] || { echo "no run id in the output above"; exit 1; }
+              echo "waiting for run $run_id"
+              while :; do
+                status=$(flwr ls fedfleet-k8s --run-id "$run_id" --format json 2>/dev/null \
+                  | python -c 'import json,sys; r=json.load(sys.stdin)["runs"][0]; print(r["status"], "|", r.get("status-details", ""))' \
+                  || echo "unknown |")
+                case "$status" in
+                  finished:completed*) echo "run $run_id: $status"; exit 0 ;;
+                  finished:*) echo "run $run_id: $status"; exit 1 ;;
+                esac
+                sleep 15
+              done
+          env:
+            - { name: FLWR_HOME, value: /flwr-home }
+            - { name: HOME, value: /tmp }
+            - { name: RUN_CONFIG, value: "num-server-rounds=3" }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1", memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: flwr-home, mountPath: /flwr-home }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        - { name: flwr-home, emptyDir: {} }

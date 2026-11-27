@@ -1,0 +1,3 @@
+# TLS and site authentication on. Secrets: superlink-tls, site-<i>-auth.
+tls:
+  enabled: true
