@@ -10,7 +10,7 @@ echo "== checks (2.1)"
 if sudo ss -ltnup | grep -E ':(6443|10250|2379|2380|8472|10010) '; then
   echo "a k3s port is in use, stopping"; exit 1
 fi
-sudo iptables-save > ~/iptables-before-k3s.txt
+sudo iptables-save | tee ~/iptables-before-k3s.txt >/dev/null
 systemctl --no-pager status fedfleet-superlink fedfleet-control-api > ~/services-before-k3s.txt || true
 free -h > ~/free-before-k3s.txt
 

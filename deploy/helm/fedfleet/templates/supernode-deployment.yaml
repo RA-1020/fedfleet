@@ -44,8 +44,7 @@ spec:
             - { name: FLWR_HOME, value: /flwr-home }
             - { name: HOME, value: /tmp }
           resources:
-            requests: { cpu: 500m, memory: 1Gi }
-            limits:   { cpu: "2", memory: 3Gi }
+            {{- toYaml (default $.Values.supernode.resources .resources) | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

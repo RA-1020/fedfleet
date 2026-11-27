@@ -8,3 +8,15 @@ spec:
   resources:
     requests:
       storage: {{ .Values.superlink.persistence.size }}
+---
+# Run folders: metrics and checkpoints of every run (HOME of the SuperLink pod).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-superlink-runs
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .Values.superlink.runs.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.superlink.runs.size }}
