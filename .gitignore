@@ -15,3 +15,8 @@ keys/
 
 # Wrangler local cache
 .wrangler/
+
+# test and coverage output
+.coverage
+coverage.xml
+pytest.xml

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Dependency updates for FedFleet (task 15.6). Pins the image's base by digest and every GitHub Action by commit; groups routine updates weekly.",
+  "extends": ["config:recommended", "docker:pinDigests", "helpers:pinGitHubActionDigests"],
+  "schedule": ["before 6am on monday"],
+  "timezone": "Asia/Karachi",
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 3,
+  "packageRules": [
+    {
+      "description": "Flower is pinned exactly and upgraded by hand: the privacy accounting and SecAgg+ results depend on its version.",
+      "matchPackageNames": ["flwr"],
+      "enabled": false
+    },
+    {
+      "description": "One weekly PR for GitHub Actions.",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "description": "The base image: Python minor versions are upgraded by hand.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["python"],
+      "matchUpdateTypes": ["minor", "major"],
+      "enabled": false
+    }
+  ]
+}
