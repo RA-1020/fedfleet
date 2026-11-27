@@ -1,0 +1,8 @@
+# Who is asked to review what (GitHub requests these reviewers on every pull request).
+*                         @RA-1020
+/deploy/helm/             @Hashim-Mughal @RA-1020
+/deploy/k8s/              @Hashim-Mughal @RA-1020
+# The tailnet policy, the live services and secrets handling always need the repository owner.
+/deploy/tailscale/        @RA-1020
+/deploy/control_api/      @RA-1020
+/.github/                 @RA-1020
