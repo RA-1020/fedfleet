@@ -1,0 +1,22 @@
+# Keep secrets, data and local state out of every image build context.
+.git
+.github
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+certificates
+keys
+data
+logs
+runs
+fedfleet-runs*
+*.pkl
+*.pt
+*.onnx
+*.key
+*.pem
+.env
+.env.*
+**/node_modules
+**/.wrangler

@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared by run_sites.sh and start_node.sh: secure flags for site <i> if its files exist.
 # TLS needs certificates/ca.pem; authentication needs keys/site-<i>.key.
 # FEDFLEET_INSECURE=1 forces --insecure, for tests against the local insecure SuperLink

@@ -310,3 +310,11 @@ def test_wait_for_sites_queues_the_run():
         assert [q["run"] for q in c.get("/status", headers=KEY).json()["queue"]] == ["elastic-q"]
     finally:
         api._online_sites = lambda: 3
+
+
+def test_chaos_secagg_drop_field():
+    assert "chaos-secagg-drop=\"\"" in api._run_config(api.RunRequest(name="x"), "/m")
+    assert "chaos-secagg-drop=\"2:3\"" in api._run_config(api.RunRequest(name="x", secagg=True, chaos_secagg_drop="2:3"), "/m")
+    assert c.post("/runs", json={"name": "cd1", "chaos_secagg_drop": "2:3"}, headers=KEY).status_code == 422   # needs secagg
+    for bad in ("2", "a:b", "2:3; rm -rf /", "2:3 dp=true"):
+        assert c.post("/runs", json={"name": "cd2", "secagg": True, "chaos_secagg_drop": bad}, headers=KEY).status_code == 422
