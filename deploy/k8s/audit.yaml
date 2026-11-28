@@ -1,0 +1,6 @@
+# Minimal audit policy: Metadata for everything, Secrets included,
+# so Secret contents never reach the log.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+  - level: Metadata
