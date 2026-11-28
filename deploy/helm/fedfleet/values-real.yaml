@@ -1,0 +1,37 @@
+# The real cluster: the k3s server on the Oracle aggregator, sites on the Azure node.
+#   helm upgrade --install fedfleet deploy/helm/fedfleet -n fedfleet --create-namespace \
+#     -f deploy/helm/fedfleet/values-real.yaml
+# Not for the live federation yet: the live SuperLink and site still run under systemd.
+image:
+  repository: ghcr.io/ra-1020/fedfleet
+  # Published by .github/workflows/image.yml from main. Pin a commit tag (sha-<short>), not
+  # latest, so a rollout is repeatable; check the tag exists under the repository's Packages.
+  tag: sha-ee30147
+  pullPolicy: IfNotPresent
+
+superlink:
+  nodeSelector:
+    fedfleet.io/role: control
+  # The ServerApp runs in this pod and evaluates the global model every round; the aggregator
+  # has 12 GB, most of it free. ESTIMATE, check with kubectl top.
+  resources:
+    requests: { cpu: 250m, memory: 1Gi }
+    limits:   { cpu: "1", memory: 3Gi }
+
+# Azure B2s: 2 vCPU and 4 GiB, shared with k3s itself (about 0.5 GiB) and, for now, the live
+# site's systemd service. ESTIMATES, to be checked with `kubectl top pods` on the first run.
+supernode:
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: "1", memory: 1200Mi }
+
+sites:
+  - name: site0
+    partitionId: 0
+    nodeSelector: { fedfleet.io/cloud: azure }
+  - name: site1
+    partitionId: 1
+    nodeSelector: { fedfleet.io/cloud: azure }
+  - name: site2
+    partitionId: 2
+    nodeSelector: { fedfleet.io/cloud: azure }

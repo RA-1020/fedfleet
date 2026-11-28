@@ -1,0 +1,42 @@
+image:
+  repository: fedfleet
+  tag: dev
+  pullPolicy: IfNotPresent   # the dev image is imported into k3d, never pulled
+
+tls:
+  enabled: false             # values-tls.yaml turns it on
+  serverSecret: superlink-tls
+
+superlink:
+  nodeSelector:
+    fedfleet.io/role: control
+  persistence:              # the SuperLink's state database
+    size: 1Gi
+    storageClass: local-path
+  runs:                     # run folders (metrics, checkpoints); about 35 MB for every run so far
+    size: 2Gi
+    storageClass: local-path
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: 500m, memory: 1Gi }
+
+# Default resources of each site; a site entry may set its own `resources`.
+supernode:
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: "2", memory: 3Gi }
+
+networkPolicy:
+  enabled: true
+
+numPartitions: 3
+sites:
+  - name: site0
+    partitionId: 0
+    nodeSelector: { fedfleet.io/site: site0 }
+  - name: site1
+    partitionId: 1
+    nodeSelector: { fedfleet.io/site: site1 }
+  - name: site2
+    partitionId: 2
+    nodeSelector: { fedfleet.io/site: site2 }

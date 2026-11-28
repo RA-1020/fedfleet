@@ -98,3 +98,22 @@ jobs:
           python-version: "3.12"
       - run: pip install detect-secrets==1.5.0
       - run: scripts/ci_secrets.sh
+
+  helm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.1
+      - name: Lint and render the chart with each values file
+        run: |
+          chart=deploy/helm/fedfleet
+          helm lint "$chart"
+          helm lint "$chart" -f "$chart/values-real.yaml"
+          helm template t "$chart" > /dev/null
+          helm template t "$chart" -f "$chart/values-real.yaml" > /dev/null
+          helm template t "$chart" --set tls.enabled=true --set networkPolicy.enabled=false > /dev/null

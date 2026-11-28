@@ -1,0 +1,30 @@
+{{- if .Values.networkPolicy.enabled }}
+# Only this release's sites may reach the Fleet API (9092), and only pods labelled
+# fedfleet.io/may-submit=true (the submit Job, later the control API) may reach Flower's
+# control port (8000), which can start runs. Everything else to the SuperLink is refused.
+# On the live machine the same port is bound to localhost and fronted by a token.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-superlink
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: superlink
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: supernode
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - { protocol: TCP, port: 9092 }
+    - from:
+        - podSelector:
+            matchLabels:
+              fedfleet.io/may-submit: "true"
+      ports:
+        - { protocol: TCP, port: 8000 }
+{{- end }}
