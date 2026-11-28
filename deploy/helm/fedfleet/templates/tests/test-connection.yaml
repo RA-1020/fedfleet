@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-test-connection
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation
+  labels:
+    # Admitted by the NetworkPolicy like a SuperNode (name + instance). It has no
+    # fedfleet.io/site label, so the SuperNode Deployments never select it.
+    app.kubernetes.io/name: supernode
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: test
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+  containers:
+    - name: connect
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      command: ["python", "-c"]
+      args:
+        # A new pod is refused by the NetworkPolicy for a few seconds (seen on k3d), so retry.
+        - |
+          import socket, time
+          host = "{{ .Release.Name }}-superlink"
+          deadline = time.time() + 60
+          while True:
+              try:
+                  socket.create_connection((host, 9092), 3).close()
+                  print("SuperLink Fleet port 9092 reachable")
+                  break
+              except OSError as e:
+                  if time.time() > deadline:
+                      print("not reachable after 60 s:", e)
+                      raise SystemExit(1)
+                  time.sleep(3)
+      resources:
+        requests: { cpu: 50m, memory: 64Mi }
+        limits:   { cpu: 200m, memory: 256Mi }
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: { drop: [ALL] }
