@@ -76,3 +76,10 @@ groups:
         annotations:
           summary: "The Azure site has used today's VM budget ({{ $value }} min)"
           description: "The controller will not start the VM again until the next UTC day."
+
+      - alert: FedFleetStateSnapshotStale
+        expr: fedfleet_state_snapshot_checked_age_seconds > 900
+        labels: {severity: warning}
+        annotations:
+          summary: "The SuperLink state snapshot has not run for {{ $value }} s"
+          description: "fedfleet-state-snapshot.timer should copy the state database every 5 min for the cold standby. Check systemctl status fedfleet-state-snapshot.service; until it runs, a failover would restore an older site registry."

@@ -1,0 +1,10 @@
+[Unit]
+Description=FedFleet consistent copy of the SuperLink state database (read-only, for the cold standby)
+After=fedfleet-superlink.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/usr/bin/python3 /home/ubuntu/fedfleet/deploy/backup/state_snapshot.py

@@ -19,6 +19,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -164,8 +165,31 @@ def run_name(path: Path) -> str:
 
 # Services on the aggregator whose state the alerts watch (fedfleet-alerts.yml).
 SERVICES = ("fedfleet-superlink", "fedfleet-control-api", "fedfleet-backup", "cloudflared", "grafana-server",
-            "fedfleet-watchdog.timer", "fedfleet-elastic")   # a timer is "active" while it is scheduled
+            "fedfleet-watchdog.timer", "fedfleet-elastic", "fedfleet-state-snapshot.timer")   # a timer is "active" while it is scheduled
 ELASTIC_STATE = Path.home() / "fedfleet-elastic" / "state.json"
+STATE_SNAPSHOT = Path.home() / "fedfleet-state-backup" / "state_snapshot.json"
+
+
+def snapshot_text(path: Path = STATE_SNAPSHOT, now: float | None = None) -> str:
+    """Age of the newest state-database snapshot (deploy/backup/state_snapshot.py) and of its last
+    successful check; nothing if no snapshot was ever taken."""
+    try:
+        st = json.loads(path.read_text())
+        taken, checked = float(st["taken"]), float(st["checked"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+    now = time.time() if now is None else now
+    vals = [
+        ("fedfleet_state_snapshot_age_seconds", "seconds since the state database content in the snapshot was taken",
+         round(now - taken, 3)),
+        ("fedfleet_state_snapshot_checked_age_seconds", "seconds since the snapshot job last ran successfully",
+         round(now - checked, 3)),
+        ("fedfleet_state_snapshot_bytes", "size of the state database snapshot", float(st.get("size") or 0)),
+    ]
+    out = []
+    for name, help_, v in vals:
+        out += [f"# HELP {name} {help_}", f"# TYPE {name} gauge", f"{name} {float(v)!r}"]
+    return "\n".join(out) + "\n"
 
 
 def elastic_text(path: Path = ELASTIC_STATE) -> str:
@@ -228,7 +252,7 @@ class Collector:
                         self.runs[key] = Run(path, run_name(path))
             for r in self.runs.values():
                 r.poll(self.rates)
-            return render(list(self.runs.values())) + services_text() + elastic_text()
+            return render(list(self.runs.values())) + services_text() + elastic_text() + snapshot_text()
 
 
 def main() -> None:
