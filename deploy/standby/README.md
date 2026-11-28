@@ -24,7 +24,7 @@ Everything else is either rebuilt or comes from the Mac:
 ## Install the snapshot on the primary (once)
 
 ```bash
-rsync -av --exclude .venv --exclude .git --exclude __pycache__ --exclude logs --exclude data --exclude certificates --exclude keys --exclude .wrangler ~/fedfleet/ ubuntu@fedfleet-agg:~/fedfleet/
+rsync -av --exclude .venv --exclude .git --exclude __pycache__ --exclude logs --exclude data --exclude certificates --exclude keys --exclude .wrangler --exclude .pytest_cache ~/fedfleet/ ubuntu@fedfleet-agg:~/fedfleet/
 ssh ubuntu@fedfleet-agg 'sudo cp ~/fedfleet/deploy/backup/fedfleet-state-snapshot.{service,timer} /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now fedfleet-state-snapshot.timer && sudo systemctl start fedfleet-state-snapshot.service && sudo systemctl restart fedfleet-backup'
 ```
 

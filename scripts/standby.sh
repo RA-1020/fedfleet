@@ -73,7 +73,9 @@ mac_ip() {
 }
 standby_runs() {    # training rounds logged on the standby for run folder $1
   # shellcheck disable=SC2029  # $1 was checked by check_name
-  sb "grep -c train_round_seconds /srv/fedfleet/fedfleet-runs-$1/rounds.jsonl 2>/dev/null" 2>/dev/null || echo 0
+  # grep -c prints 0 and exits 1 when nothing matches: keep its output, ignore the status.
+  local c; c=$(sb "grep -c train_round_seconds /srv/fedfleet/fedfleet-runs-$1/rounds.jsonl 2>/dev/null || true" 2>/dev/null)
+  echo "${c:-0}"
 }
 online_count() {    # sites the standby lists as online
   flwr supernode ls "$CONN" --format json 2>/dev/null | python3 -c '
@@ -378,7 +380,7 @@ cmd_drill() {
   t=$(date +%s)
   while :; do
     # shellcheck disable=SC2029
-    n=$(ssh "ubuntu@$AGG" "grep -c train_round_seconds ~/fedfleet-runs-$name/rounds.jsonl 2>/dev/null" || echo 0)
+    n=$(ssh "ubuntu@$AGG" "grep -c train_round_seconds ~/fedfleet-runs-$name/rounds.jsonl 2>/dev/null || true"); n=${n:-0}
     [ "${n:-0}" -ge "$after" ] && break
     [ $(( $(date +%s) - t )) -ge 1200 ] && die "only $n rounds after 20 min"
     sleep 3
@@ -394,7 +396,7 @@ cmd_drill() {
   ssh "ubuntu@$AGG" "cd ~ && ~/fedfleet/.venv/bin/flwr stop $id fedfleet-vm" >/dev/null 2>&1 \
     || echo "   !! flwr stop failed; the primary's run may keep going on its own folder (harmless: the standby uses a new name)"
   # shellcheck disable=SC2029
-  local n0; n0=$(ssh "ubuntu@$AGG" "grep -c train_round_seconds ~/fedfleet-runs-$name/rounds.jsonl" || echo "?")
+  local n0; n0=$(ssh "ubuntu@$AGG" "grep -c train_round_seconds ~/fedfleet-runs-$name/rounds.jsonl || true"); n0=${n0:-?}
   echo "== T0 $(date -u +%H:%M:%SZ): primary declared lost (run $id stopped with $n0 rounds; the service was not touched)"
   cmd_up || die "standby up failed"
   cmd_failover "$name" "$name-sb" --rounds "$rounds" || die "failover failed"
@@ -428,10 +430,12 @@ for l in sys.stdin:
     if not l.strip():
         continue
     r = json.loads(l)
+    acc, rnd, rf = r.get("global_acc"), r.get("round"), r.get("resumed_from_round")
     if r.get("event") == "resumed":
-        print(f"   resumed from round {r.get(\"resumed_from_round\")}  acc {r.get(\"global_acc\")}")
+        print(f"   resumed from round {rf}  acc {acc}")
     elif "train_round_seconds" in r:
-        print(f"   round {r[\"round\"]:2d}  acc {r.get(\"global_acc\")}  {r.get(\"train_round_seconds\")} s  replies {r.get(\"nodes_replied\")}/{r.get(\"nodes_asked\")}")'
+        secs, got, asked = r["train_round_seconds"], r.get("nodes_replied"), r.get("nodes_asked")
+        print(f"   round {rnd:2d}  acc {acc}  {secs} s  replies {got}/{asked}")'
   echo "   path Mac -> standby: $(tailscale ping -c 3 "$STANDBY_HOST" 2>&1 | tail -1)"
   echo
   echo "next: scripts/standby.sh failback $name-sb, then scripts/standby.sh down"
@@ -490,7 +494,11 @@ cmd_down() {
   if [ -f "$ENV_FILE" ]; then
     # shellcheck disable=SC1090
     . "$ENV_FILE"
-    sb 'sudo tailscale logout' >/dev/null 2>&1 && echo "   standby left the tailnet (ephemeral node removed)"
+    # Logging out cuts the Tailscale SSH session it runs in, so schedule it 2 s later.
+    sb 'sudo systemd-run --quiet --on-active=2 /usr/bin/tailscale logout' >/dev/null 2>&1 \
+      && echo "   standby leaves the tailnet in 2 s (ephemeral node removed)" \
+      || echo "   standby not reachable; its ephemeral node disappears from the tailnet on its own"
+    sleep 4
   fi
   local t0; t0=$(now)
   az group delete -n "$RG" --yes --output none || die "delete failed; check the portal"
