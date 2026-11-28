@@ -9,7 +9,7 @@ set -euo pipefail
 SERVER_IP="${1:?usage: join-agent.sh <server Tailscale IP>}"
 sudo test -s /root/k3s-token || { echo "/root/k3s-token missing"; exit 1; }
 TS_IP=$(tailscale ip -4 | head -n1)
-curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL=stable K3S_URL="https://${SERVER_IP}:6443" \
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v1.36.6+k3s1 K3S_URL="https://${SERVER_IP}:6443" \
   K3S_TOKEN_FILE=/root/k3s-token sh -s - agent \
   --node-ip "$TS_IP" --flannel-iface tailscale0 \
   --node-label fedfleet.io/cloud=azure --node-label fedfleet.io/site=site2 \
