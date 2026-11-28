@@ -106,3 +106,21 @@ tests:
             exp_annotations:
               summary: "The Azure site has used today's VM budget (182 min)"
               description: "The controller will not start the VM again until the next UTC day."
+
+  - interval: 5m
+    input_series:
+      - series: 'fedfleet_state_snapshot_checked_age_seconds'
+        values: '10 310 610 910 1210'
+      - series: 'fedfleet_state_snapshot_age_seconds'
+        values: '10 9000 9300 9600 9900'     # idle: content unchanged for hours, job still running
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: FedFleetStateSnapshotStale
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: FedFleetStateSnapshotStale
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "The SuperLink state snapshot has not run for 910 s"
+              description: "fedfleet-state-snapshot.timer should copy the state database every 5 min for the cold standby. Check systemctl status fedfleet-state-snapshot.service; until it runs, a failover would restore an older site registry."

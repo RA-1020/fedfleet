@@ -6,7 +6,7 @@ Every --interval seconds it looks at each run folder (~/fedfleet-runs*, one leve
 subfolders too) and the access log (~/fedfleet-audit/audit.jsonl) and uploads the files in FILES, but
 only files whose size or modification time changed since their last successful upload, so an
 idle aggregator makes no requests at all. The blob name is the file's path under the home
-folder, e.g. fedfleet-runs-crash/latest_checkpoint.pt.
+folder, e.g. fedfleet-runs-crash/latest_checkpoint.pt or fedfleet-state-backup/state.db.
 
 The SAS file holds one line: the container URL with a SAS token, from the Azure portal
 (container > Shared access tokens, permissions Create and Write, HTTPS only). It is a secret:
@@ -31,9 +31,12 @@ import urllib.request
 from pathlib import Path
 
 FILES = ("latest_checkpoint.pt", "rounds.jsonl", "final_exchanged.pt", "model.onnx", "model_card.md",
-         "dp_budget.json", "audit.jsonl")
-# Run folders, and the control API's access log (so a copy of it exists off the VM).
-PATTERNS = ["~/fedfleet-runs*/{f}", "~/fedfleet-runs*/*/{f}", "~/fedfleet-audit/{f}"]
+         "dp_budget.json", "audit.jsonl", "state.db", "state_snapshot.json")
+# Run folders, the control API's access log (so a copy of it exists off the VM), and the
+# SuperLink state snapshot made by state_snapshot.py (for the cold standby, task 2.10a). The live
+# ~/fedfleet-state/state.db is never read here: copying it while the SuperLink writes could tear it.
+PATTERNS = ["~/fedfleet-runs*/{f}", "~/fedfleet-runs*/*/{f}", "~/fedfleet-audit/{f}",
+            "~/fedfleet-state-backup/{f}"]
 API_VERSION = "2021-12-02"
 
 
